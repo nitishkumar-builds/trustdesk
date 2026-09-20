@@ -114,6 +114,8 @@ textarea.draft-body:disabled { background: #f3f4f6; }
 .note { padding: 8px 10px; border-radius: var(--radius); font-size: 13px; }
 .note-ok { background: var(--ok-soft); color: var(--ok); }
 .note-warn { background: var(--warn-soft); color: var(--warn); }
+.feedback { border-top: 1px dashed var(--border); margin-top: 10px; padding-top: 8px; display: flex; flex-direction: column; gap: 6px; }
+.feedback-comment { flex: 1; min-width: 160px; }
 
 /* drawer */
 .drawer-backdrop { position: fixed; inset: 0; background: rgba(17, 24, 39, 0.35); z-index: 20; }

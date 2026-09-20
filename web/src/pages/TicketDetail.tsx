@@ -5,7 +5,7 @@ import { useErrors } from '../components/ErrorBanner.tsx'
 import { ActionButton, Badge, JsonBlock, Kv, Spinner, fmt, useAction } from '../components/ui.tsx'
 import { RUNS_LIMIT, api } from '../lib/api.ts'
 import { useSession } from '../lib/session.tsx'
-import type { AgentRun, Draft, FiredRule, TicketDetail as TicketDetailDto, ToolActionDetail, ToolCatalogItem } from '../lib/types.ts'
+import type { AgentRun, Draft, Feedback, FiredRule, TicketDetail as TicketDetailDto, ToolActionDetail, ToolCatalogItem } from '../lib/types.ts'
 
 // Draft lifecycle (server D-045/D-048): which statuses each transition accepts.
 const DRAFT_FROM: Record<'edited' | 'approved' | 'rejected' | 'sent', readonly string[]> = {
@@ -33,13 +33,14 @@ function TicketDetail({ ticketId }: { ticketId: string }) {
   const [drafts, setDrafts] = useState<Draft[]>([])
   const [actions, setActions] = useState<ToolActionDetail[]>([])
   const [runs, setRuns] = useState<AgentRun[]>([])
+  const [feedback, setFeedback] = useState<Feedback[]>([])
   const [catalog, setCatalog] = useState<ToolCatalogItem[]>([])
   const [docId, setDocId] = useState<string | null>(null)
   const closeDoc = useCallback(() => setDocId(null), [])
 
   // No optimistic updates: every mutation re-fetches everything the page shows.
   const reload = useCallback(async () => {
-    const [d, dr, ac, ru] = await Promise.all([api.getTicket(ticketId), api.listDrafts(ticketId), api.listActions(ticketId), api.listRuns(ticketId)])
+    const [d, dr, ac, ru, fb] = await Promise.all([api.getTicket(ticketId), api.listDrafts(ticketId), api.listActions(ticketId), api.listRuns(ticketId), api.listFeedback(ticketId)])
     // eval_case runs belong to the Evals page: they carry evaluation-only data (rule R2), not operations.
     const operational = ru.items.filter((r) => r.run_type !== 'eval_case')
     const triageId = d.latest_triage?.run_id ?? null
@@ -48,6 +49,7 @@ function TicketDetail({ ticketId }: { ticketId: string }) {
     setDrafts(dr.items)
     setActions(ac.items)
     setRuns(operational)
+    setFeedback(fb.items)
     setTriageRunExtra(extra)
     setLoadFailed(false)
   }, [ticketId])
@@ -92,6 +94,8 @@ function TicketDetail({ ticketId }: { ticketId: string }) {
   // is always the text the server acts on.
   const dirty = draft !== null && body !== draft.body
   const [rejectReason, setRejectReason] = useState('Rejected by the reviewer in the TrustDesk UI')
+  // Feedback (Phase 11 item 2): thumbs map to rating 5 / 1; an unsaved edit of the body is sent as the corrected response.
+  const [feedbackComment, setFeedbackComment] = useState('')
 
   // ---- request-action form state -------------------------------------------------------------
   // Defaults are derived from the catalog and the ticket; the form state only holds user edits.
@@ -158,6 +162,19 @@ function TicketDetail({ ticketId }: { ticketId: string }) {
       await api.decideAction(action.action_id, decision, decisionReason)
       await reload()
     }, `POST /api/tool-actions/${action.action_id}/approve as ${session.roleLabel}`)
+  const leaveFeedback = (rating: 1 | 5) =>
+    run(`feedback-${rating}`, async () => {
+      if (!draft) return
+      await api.createFeedback({
+        ticket_id: ticketId,
+        draft_id: draft.draft_id,
+        rating,
+        reason: feedbackComment.trim() || undefined,
+        corrected_response: dirty ? body : undefined,
+      })
+      setFeedbackComment('')
+      await reload()
+    }, 'POST /api/feedback')
   const execute = (action: ToolActionDetail) =>
     run(`execute-${action.action_id}`, async () => {
       await api.executeAction(action.action_id)
@@ -380,6 +397,33 @@ function TicketDetail({ ticketId }: { ticketId: string }) {
                   <ActionButton name="send" busy={busy} onClick={() => patchDraft('send', { status: 'sent' })} disabled={dirty || !DRAFT_FROM.sent.includes(draft.status)} className="btn-primary">
                     Send
                   </ActionButton>
+                </div>
+                <div className="feedback">
+                  <div className="row">
+                    <span className="muted small">Was this draft useful?</span>
+                    <ActionButton name="feedback-5" busy={busy} onClick={() => leaveFeedback(5)} title="thumbs up: rating 5">
+                      Thumbs up
+                    </ActionButton>
+                    <ActionButton name="feedback-1" busy={busy} onClick={() => leaveFeedback(1)} title="thumbs down: rating 1">
+                      Thumbs down
+                    </ActionButton>
+                    <input className="input input-sm feedback-comment" value={feedbackComment} onChange={(e) => setFeedbackComment(e.target.value)} placeholder="comment (optional)" aria-label="Feedback comment" />
+                    {dirty ? <span className="muted small">your unsaved edit is sent as the corrected response</span> : null}
+                  </div>
+                  {feedback.length > 0 ? (
+                    <ul className="items small">
+                      {feedback.slice(0, 3).map((f) => (
+                        <li key={f.feedback_id}>
+                          <Badge value={f.rating >= 4 ? 'good' : f.rating <= 2 ? 'poor' : 'mixed'} tone={f.rating >= 4 ? 'ok' : f.rating <= 2 ? 'danger' : 'warn'} /> {f.rating}/5
+                          {f.draft_id ? <span className="muted"> on <code>{f.draft_id}</code></span> : null}
+                          {f.reason ? <span> — {f.reason}</span> : null}
+                          {f.corrected_response ? <span className="muted"> (with a corrected response)</span> : null}
+                          <span className="muted"> · {fmt(f.created_at)}</span>
+                        </li>
+                      ))}
+                      {feedback.length > 3 ? <li className="muted">{feedback.length - 3} more…</li> : null}
+                    </ul>
+                  ) : null}
                 </div>
               </>
             ) : (

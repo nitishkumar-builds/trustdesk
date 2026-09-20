@@ -129,6 +129,8 @@ All routes below are mounted under `http://localhost:4000` and, except `GET /hea
 | GET | `/api/eval-runs` | any | Past eval runs, newest first |
 | GET | `/api/eval-runs/:evalRunId` | any | Status, metrics, per-case results and adversarial summary of one run |
 | GET | `/api/metrics/summary` | any | Observability: runs per type/status, p50/p95 latency, tokens and estimated cost (`since`, `ticket_id`) |
+| POST | `/api/feedback` | any | Reviewer feedback on a ticket or draft: `rating` 1–5, optional `reason` and `corrected_response` (201) |
+| GET | `/api/feedback` | any | Feedback newest first with the average rating (`ticket_id`, `draft_id`, `limit`) |
 
 Errors always use `{ "error": { "code", "message", "details" | null, "request_id" } }` with codes `VALIDATION_ERROR` 400, `UNAUTHORIZED` 401, `FORBIDDEN` 403, `GUARDRAIL_BLOCKED` 403, `NOT_FOUND` 404, `CONFLICT` 409, `TOOL_EXECUTION_FAILED` 500, `INTERNAL_ERROR` 500, `AI_PROVIDER_ERROR` 502. Success bodies are plain snake_case JSON without an envelope. `docs/API_CONTRACT.md` is the language-agnostic contract this implements; the only deviations are additive (extra fields such as `fired_rules`, `guardrail_outcome`, `idempotent_replay`).
 
@@ -153,6 +155,7 @@ The full append-only log is the "Decisions" section of `CLAUDE.md` (D-000 onward
 
 Good-To-Have decisions (Phase 11):
 
+- **Feedback (item 2).** `POST /api/feedback` stores a 1–5 rating with an optional reason and corrected response against a ticket and, optionally, one of its drafts (the draft must belong to the ticket); `GET /api/feedback?ticket_id=` lists newest first with the average. In the ticket page, thumbs up/down under the draft map to ratings 5 and 1, the comment box is the reason, and an unsaved edit of the draft text is submitted as the corrected response. Feedback is stored for later analysis only; nothing reads it back into a prompt.
 - **Observability (item 1).** Every model call already recorded `model_name`, `prompt_version`, `latency_ms` and `token_usage`; the adapter factory now attaches `cost_estimate` from a small price table (`server/src/ai/pricing.ts`, USD per million tokens, approximate list prices, overridable with `AI_PRICE_TABLE_JSON`; unknown models are reported as *unpriced* rather than guessed). `GET /api/metrics/summary` aggregates `agent_run` — runs per type and status, nearest-rank p50/p95/max latency overall and per type, prompt/completion tokens per model, estimated cost — with optional `since` and `ticket_id` windows, and the `/metrics` page renders it.
 
 Other choices worth knowing: policy windows are always computed as of the ticket's `created_at` (rule R1); tool executors are simulated; the eval report keeps the exact case-result shape from `docs/EVALUATION_GUIDE.md` and stores diagnostics beside it; the frontend derives the role label from the token so the header can never claim a role the token lacks.
@@ -213,7 +216,7 @@ trustdesk/
 │   │   ├── ai/                   adapter types, mockAdapter, openRouterAdapter, pricing.ts (cost table), prompts/triage.v1, draftReply.v1
 │   │   ├── guardrails/           patterns, inputScanner, documentTrust, policy (decision table), refusalTemplates, outputScanner, selfTest
 │   │   ├── seed/seed.ts          idempotent loader for data/ (--reset truncates first)
-│   │   └── modules/              tickets, customers, orders, knowledge, triage, drafts, toolActions (+ executors/), traces, evals, metrics
+│   │   └── modules/              tickets, customers, orders, knowledge, triage, drafts, toolActions (+ executors/), traces, evals, metrics, feedback
 │   └── tests/                    Vitest + Supertest: unit, API, contract, auth enumeration, integration/demoFlow
 └── web/                          React 18 + Vite + TypeScript, plain CSS
     ├── vite.config.ts            proxies /api and /health to :4000

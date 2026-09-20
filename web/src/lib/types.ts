@@ -296,6 +296,16 @@ export interface EvalRun {
   error: string | null
 }
 
+export interface Feedback {
+  feedback_id: string
+  ticket_id: string
+  draft_id: string | null
+  rating: number
+  reason: string | null
+  corrected_response: string | null
+  created_at: string
+}
+
 export interface LatencyStats {
   count: number
   p50_ms: number | null

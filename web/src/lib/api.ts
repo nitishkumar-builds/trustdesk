@@ -10,6 +10,7 @@ import type {
   EvalProvider,
   EvalRun,
   EvalRunSummary,
+  Feedback,
   MetricsSummary,
   Page,
   TicketDetail,
@@ -134,4 +135,7 @@ export const api = {
   listEvalRuns: () => get<{ items: EvalRunSummary[]; total: number }>('/eval-runs?limit=20'),
 
   metricsSummary: () => get<MetricsSummary>('/metrics/summary'),
+
+  listFeedback: (ticketId: string) => get<{ items: Feedback[]; total: number; average_rating: number | null }>(`/feedback?ticket_id=${enc(ticketId)}`),
+  createFeedback: (body: { ticket_id: string; draft_id?: string; rating: number; reason?: string; corrected_response?: string }) => post<Feedback>('/feedback', body),
 }

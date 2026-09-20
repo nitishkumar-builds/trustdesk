@@ -9,6 +9,7 @@ import { requestId } from './middleware/requestId.js';
 import { router as customersRouter } from './modules/customers/router.js';
 import { router as draftsRouter } from './modules/drafts/router.js';
 import { router as evalsRouter } from './modules/evals/router.js';
+import { router as feedbackRouter } from './modules/feedback/router.js';
 import { router as knowledgeRouter } from './modules/knowledge/router.js';
 import { router as metricsRouter } from './modules/metrics/router.js';
 import { router as ordersRouter } from './modules/orders/router.js';
@@ -53,6 +54,7 @@ export function createApp(): Express {
   api.use(tracesRouter);
   api.use(evalsRouter);
   api.use(metricsRouter);
+  api.use(feedbackRouter);
   app.use('/api', api);
 
   app.use((req, _res, next) => {
