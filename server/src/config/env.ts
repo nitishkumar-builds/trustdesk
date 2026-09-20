@@ -11,6 +11,8 @@ const envSchema = z.object({
   OPENROUTER_BASE_URL: z.string().url().default('https://openrouter.ai/api/v1'),
   OPENROUTER_MODEL: z.string().default('google/gemini-2.0-flash-001'),
   OPENROUTER_TIMEOUT_MS: z.coerce.number().int().positive().default(30000),
+  /** Optional JSON object { "<model>": { "input_per_million": n, "output_per_million": n } } merged over src/ai/pricing.ts. */
+  AI_PRICE_TABLE_JSON: z.string().optional(),
   DEMO_AGENT_TOKEN: z.string().min(1),
   DEMO_MANAGER_TOKEN: z.string().min(1),
   DEMO_ADMIN_TOKEN: z.string().min(1),

@@ -296,6 +296,25 @@ export interface EvalRun {
   error: string | null
 }
 
+export interface LatencyStats {
+  count: number
+  p50_ms: number | null
+  p95_ms: number | null
+  max_ms: number | null
+}
+
+export interface MetricsSummary {
+  generated_at: string
+  window: { since: string | null; ticket_id: string | null }
+  runs_total: number
+  runs_by_type: Record<string, number>
+  runs_by_status: Record<string, number>
+  latency: LatencyStats & { by_type: Record<string, LatencyStats> }
+  tokens: { prompt: number; completion: number; total: number; runs_with_usage: number; by_model: Record<string, { prompt: number; completion: number; runs: number }> }
+  estimated_cost_usd: { total: number; runs_priced: number; runs_unpriced: number; by_model: Record<string, number> }
+  pricing: { source: 'default' | 'env'; models: string[]; note: string }
+}
+
 export interface EvalRunSummary {
   eval_run_id: string
   status: EvalRunStatus

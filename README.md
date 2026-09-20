@@ -80,6 +80,7 @@ All variables live in `server/.env` (copied from `server/.env.example`) and are 
 | `OPENROUTER_BASE_URL` | OpenRouter base URL | `https://openrouter.ai/api/v1` | no |
 | `OPENROUTER_MODEL` | Model id sent to OpenRouter | `google/gemini-2.0-flash-001` | no (see below) |
 | `OPENROUTER_TIMEOUT_MS` | Per-request timeout for the live model | `30000` | no |
+| `AI_PRICE_TABLE_JSON` | Optional JSON object `{ "<model>": { "input_per_million", "output_per_million" } }` merged over the price table in `server/src/ai/pricing.ts` | unset (built-in table) | no |
 | `DEMO_AGENT_TOKEN` | Bearer token mapped to role `support_agent` | `agent-token-123` (from `.env.example`) | yes |
 | `DEMO_MANAGER_TOKEN` | Bearer token mapped to role `support_manager` | `manager-token-123` | yes |
 | `DEMO_ADMIN_TOKEN` | Bearer token mapped to role `admin` | `admin-token-123` | yes |
@@ -127,6 +128,7 @@ All routes below are mounted under `http://localhost:4000` and, except `GET /hea
 | POST | `/api/eval-runs` | admin | Start an evaluation (`provider`, `case_ids`); 202, completes in the background |
 | GET | `/api/eval-runs` | any | Past eval runs, newest first |
 | GET | `/api/eval-runs/:evalRunId` | any | Status, metrics, per-case results and adversarial summary of one run |
+| GET | `/api/metrics/summary` | any | Observability: runs per type/status, p50/p95 latency, tokens and estimated cost (`since`, `ticket_id`) |
 
 Errors always use `{ "error": { "code", "message", "details" | null, "request_id" } }` with codes `VALIDATION_ERROR` 400, `UNAUTHORIZED` 401, `FORBIDDEN` 403, `GUARDRAIL_BLOCKED` 403, `NOT_FOUND` 404, `CONFLICT` 409, `TOOL_EXECUTION_FAILED` 500, `INTERNAL_ERROR` 500, `AI_PROVIDER_ERROR` 502. Success bodies are plain snake_case JSON without an envelope. `docs/API_CONTRACT.md` is the language-agnostic contract this implements; the only deviations are additive (extra fields such as `fired_rules`, `guardrail_outcome`, `idempotent_replay`).
 
@@ -148,6 +150,10 @@ The full append-only log is the "Decisions" section of `CLAUDE.md` (D-000 onward
 - **The AI only recommends.** A draft's `recommended_actions` are filtered by rules and stored; nothing runs. A human calls `POST /api/tool-actions`, the request is validated against the catalog, the category, the case facts and the coupon cap, sensitive tools stop at `approval_required`, only a manager or admin can approve, and a separate human call executes. Low-risk tools (`escalate_to_human`, `open_carrier_investigation`) execute inside the creating request. `issue_coupon` is never recommended by the AI at all.
 - **Idempotency.** Every tool request carries `payload.idempotency_key`; `(tool_name, idempotency_key)` is a database unique constraint. A replay returns the existing action with `idempotent_replay: true` (HTTP 200 instead of 201) and never creates a second row; two concurrent creates are decided by the constraint. Execution is a conditional `approved → executing` claim, so two concurrent executes run the executor once, and re-executing an `executed` action returns the stored result.
 - **Refusals are templates, not model text.** When the decision table says `refuse_and_escalate`, the model is not called: the body is one of three fixed templates (`secret_disclosure_request`, `identity_bypass_request`, `injection_coupon_request`) with the required citations attached. An injection therefore cannot negotiate the wording of its own refusal, the reply is guaranteed not to contain a secret, and the behaviour is identical on the mock and on a live model.
+
+Good-To-Have decisions (Phase 11):
+
+- **Observability (item 1).** Every model call already recorded `model_name`, `prompt_version`, `latency_ms` and `token_usage`; the adapter factory now attaches `cost_estimate` from a small price table (`server/src/ai/pricing.ts`, USD per million tokens, approximate list prices, overridable with `AI_PRICE_TABLE_JSON`; unknown models are reported as *unpriced* rather than guessed). `GET /api/metrics/summary` aggregates `agent_run` — runs per type and status, nearest-rank p50/p95/max latency overall and per type, prompt/completion tokens per model, estimated cost — with optional `since` and `ticket_id` windows, and the `/metrics` page renders it.
 
 Other choices worth knowing: policy windows are always computed as of the ticket's `created_at` (rule R1); tool executors are simulated; the eval report keeps the exact case-result shape from `docs/EVALUATION_GUIDE.md` and stores diagnostics beside it; the frontend derives the role label from the token so the header can never claim a role the token lacks.
 
@@ -204,17 +210,17 @@ trustdesk/
 │   │   ├── middleware/           requestId, auth (requireAuth, requireRole), errorHandler, asyncHandler
 │   │   ├── db/                   Prisma client, prefixed cuid2 ids
 │   │   ├── domain/               policyWindows.ts (return window, warranty), businessDays.ts
-│   │   ├── ai/                   adapter types, mockAdapter, openRouterAdapter, prompts/triage.v1, draftReply.v1
+│   │   ├── ai/                   adapter types, mockAdapter, openRouterAdapter, pricing.ts (cost table), prompts/triage.v1, draftReply.v1
 │   │   ├── guardrails/           patterns, inputScanner, documentTrust, policy (decision table), refusalTemplates, outputScanner, selfTest
 │   │   ├── seed/seed.ts          idempotent loader for data/ (--reset truncates first)
-│   │   └── modules/              tickets, customers, orders, knowledge, triage, drafts, toolActions (+ executors/), traces, evals
+│   │   └── modules/              tickets, customers, orders, knowledge, triage, drafts, toolActions (+ executors/), traces, evals, metrics
 │   └── tests/                    Vitest + Supertest: unit, API, contract, auth enumeration, integration/demoFlow
 └── web/                          React 18 + Vite + TypeScript, plain CSS
     ├── vite.config.ts            proxies /api and /health to :4000
     └── src/
         ├── lib/                  api.ts (typed fetch, error envelope), session.tsx (token + role), types.ts
         ├── components/           ErrorBanner, ui (badges, spinner, drawer, useAction), DocumentDrawer
-        ├── pages/                TicketQueue, TicketDetail, EvalsPage, DocumentsPage
+        ├── pages/                TicketQueue, TicketDetail, EvalsPage, DocumentsPage, MetricsPage
         └── styles.css            all styling
 ```
 

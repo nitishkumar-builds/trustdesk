@@ -3,6 +3,7 @@ import { ErrorBanners } from './components/ErrorBanner.tsx'
 import { TokenSelector } from './lib/session.tsx'
 import DocumentsPage from './pages/DocumentsPage.tsx'
 import EvalsPage from './pages/EvalsPage.tsx'
+import MetricsPage from './pages/MetricsPage.tsx'
 import TicketDetail from './pages/TicketDetail.tsx'
 import TicketQueue from './pages/TicketQueue.tsx'
 
@@ -11,6 +12,7 @@ import TicketQueue from './pages/TicketQueue.tsx'
 //   /tickets/:ticketId   TicketDetail
 //   /evals               EvalsPage
 //   /documents           DocumentsPage
+//   /metrics             MetricsPage (Phase 11)
 export default function App() {
   return (
     <>
@@ -25,6 +27,7 @@ export default function App() {
             </NavLink>
             <NavLink to="/evals">Evals</NavLink>
             <NavLink to="/documents">Documents</NavLink>
+            <NavLink to="/metrics">Metrics</NavLink>
           </nav>
         </div>
         <TokenSelector />
@@ -36,6 +39,7 @@ export default function App() {
           <Route path="/tickets/:ticketId" element={<TicketDetail />} />
           <Route path="/evals" element={<EvalsPage />} />
           <Route path="/documents" element={<DocumentsPage />} />
+          <Route path="/metrics" element={<MetricsPage />} />
           <Route path="*" element={<p className="muted">No such page.</p>} />
         </Routes>
       </main>

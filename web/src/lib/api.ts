@@ -10,6 +10,7 @@ import type {
   EvalProvider,
   EvalRun,
   EvalRunSummary,
+  MetricsSummary,
   Page,
   TicketDetail,
   TicketListItem,
@@ -131,4 +132,6 @@ export const api = {
   startEvalRun: (provider: EvalProvider) => post<{ eval_run_id: string; status: 'running' }>('/eval-runs', { provider }),
   getEvalRun: (evalRunId: string) => get<EvalRun>(`/eval-runs/${enc(evalRunId)}`),
   listEvalRuns: () => get<{ items: EvalRunSummary[]; total: number }>('/eval-runs?limit=20'),
+
+  metricsSummary: () => get<MetricsSummary>('/metrics/summary'),
 }
