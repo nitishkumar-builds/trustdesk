@@ -18,6 +18,11 @@ const envSchema = z.object({
   /** Which embedding computes knowledge_chunk.embedding: local hashing (default, no network) or OpenRouter. */
   EMBEDDING_PROVIDER: z.enum(['local', 'openrouter']).default('local'),
   OPENROUTER_EMBEDDING_MODEL: z.string().default('openai/text-embedding-3-small'),
+  /** Phase 11 item 4: JWT login. The default is for local demos only; set a real secret in production. */
+  JWT_SECRET: z.string().min(16).default('trustdesk-dev-jwt-secret-change-me'),
+  JWT_TTL_SECONDS: z.coerce.number().int().positive().default(12 * 60 * 60),
+  /** Password given to the three seeded demo users (agent/manager/admin@trustdesk.local). */
+  DEMO_USER_PASSWORD: z.string().min(4).default('trustdesk-demo'),
   DEMO_AGENT_TOKEN: z.string().min(1),
   DEMO_MANAGER_TOKEN: z.string().min(1),
   DEMO_ADMIN_TOKEN: z.string().min(1),

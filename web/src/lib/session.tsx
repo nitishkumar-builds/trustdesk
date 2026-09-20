@@ -2,7 +2,8 @@
 // from it. The header's token selector writes the demo tokens; the override field takes any string,
 // which is how the 403-on-approval demo is shown (agent token + Approve).
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from 'react'
-import { TOKEN_KEY, readToken, writeToken } from './api.ts'
+import { TOKEN_KEY, api, readToken, writeToken } from './api.ts'
+import { useErrors } from '../components/ErrorBanner.tsx'
 
 export type Role = 'support_agent' | 'support_manager' | 'admin'
 
@@ -32,9 +33,25 @@ export interface Session {
 
 const SessionContext = createContext<Session | null>(null)
 
+const ROLES: Role[] = ['support_agent', 'support_manager', 'admin']
+
+/** The role claim of a TrustDesk JWT (payload decoded, not verified — the server verifies), or null. */
+export function roleFromJwt(token: string): { role: Role; name: string | null } | null {
+  const parts = token.split('.')
+  if (parts.length !== 3) return null
+  try {
+    const json = atob(parts[1]!.replace(/-/g, '+').replace(/_/g, '/'))
+    const payload = JSON.parse(json) as { role?: string; name?: string; iss?: string }
+    if (payload.iss !== 'trustdesk' || !payload.role || !ROLES.includes(payload.role as Role)) return null
+    return { role: payload.role as Role, name: payload.name ?? null }
+  } catch {
+    return null
+  }
+}
+
 export function roleForToken(token: string): Role | null {
   for (const role of Object.keys(DEMO_TOKENS) as Role[]) if (DEMO_TOKENS[role] === token) return role
-  return null
+  return roleFromJwt(token)?.role ?? null
 }
 
 export function SessionProvider({ children }: { children: ReactNode }) {
@@ -66,7 +83,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     return {
       token,
       role,
-      roleLabel: role ? `${ROLE_LABELS[role]} (${role})` : token ? 'custom token' : 'no token',
+      roleLabel: role ? (roleFromJwt(token) ? `${roleFromJwt(token)?.name ?? ROLE_LABELS[role]} (${role}, logged in)` : `${ROLE_LABELS[role]} (${role})`) : token ? 'custom token' : 'no token',
       canApprove: role !== 'support_agent',
       isAdmin: role === 'admin',
       selectRole,
@@ -83,10 +100,28 @@ export function useSession(): Session {
   return ctx
 }
 
-/** Header token selector: three demo-role buttons plus a free-text override. */
+/** Header token selector: three demo-role buttons, a free-text override, and an email/password login (Phase 11 item 4). */
 export function TokenSelector() {
   const session = useSession()
+  const { report } = useErrors()
   const [override, setOverride] = useState('')
+  const [showLogin, setShowLogin] = useState(false)
+  const [email, setEmail] = useState('agent@trustdesk.local')
+  const [password, setPassword] = useState('')
+  const [loggingIn, setLoggingIn] = useState(false)
+  const login = async () => {
+    setLoggingIn(true)
+    try {
+      const res = await api.login(email, password)
+      session.setToken(res.token)
+      setPassword('')
+      setShowLogin(false)
+    } catch (err) {
+      report(err, 'POST /api/auth/login')
+    } finally {
+      setLoggingIn(false)
+    }
+  }
   return (
     <div className="token-selector">
       <span className="muted">Token:</span>
@@ -120,6 +155,25 @@ export function TokenSelector() {
           Use
         </button>
       </form>
+      <button type="button" className="btn btn-sm" onClick={() => setShowLogin((v) => !v)}>
+        {showLogin ? 'Close login' : 'Log in'}
+      </button>
+      {showLogin ? (
+        <form
+          className="row"
+          onSubmit={(e) => {
+            e.preventDefault()
+            void login()
+          }}
+        >
+          <input className="input input-sm" type="email" value={email} onChange={(e) => setEmail(e.target.value)} aria-label="Email" placeholder="email" />
+          <input className="input input-sm" type="password" value={password} onChange={(e) => setPassword(e.target.value)} aria-label="Password" placeholder="password" />
+          <button type="submit" className="btn btn-sm btn-primary" disabled={loggingIn || !password}>
+            {loggingIn ? <span className="spinner spinner-inline" /> : null}
+            Sign in
+          </button>
+        </form>
+      ) : null}
       <span className="badge badge-neutral" title={session.token}>
         {session.roleLabel}
       </span>

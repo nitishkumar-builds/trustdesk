@@ -1,6 +1,7 @@
 import type { NextFunction, Request, RequestHandler, Response } from 'express';
 import { env } from '../config/env.js';
 import { forbiddenError, unauthorizedError } from '../errors/AppError.js';
+import { principalFromJwt } from '../modules/auth/service.js';
 
 export type Role = 'support_agent' | 'support_manager' | 'admin';
 
@@ -18,9 +19,10 @@ function tokenTable(): ReadonlyMap<string, Principal> {
   ]);
 }
 
+// A demo token (static fallback, D-007) or a JWT issued by POST /api/auth/login (Phase 11 item 4).
 export function resolveToken(token: string | undefined): Principal | null {
   if (!token) return null;
-  return tokenTable().get(token) ?? null;
+  return tokenTable().get(token) ?? principalFromJwt(token);
 }
 
 // Reads `Authorization: Bearer <token>`; unknown or missing -> 401 UNAUTHORIZED.
@@ -40,7 +42,8 @@ export function requireAuth(req: Request, _res: Response, next: NextFunction): v
   next();
 }
 
-// Allows only the listed roles. Must run after requireAuth.
+// Allows only the listed roles. Must run after requireAuth. Since Phase 11 item 4 the per-route
+// policies live in middleware/policy.ts (enforcePolicy); this helper is kept for ad-hoc use.
 export function requireRole(...roles: Role[]): RequestHandler {
   return (req, _res, next) => {
     if (!req.principal) {

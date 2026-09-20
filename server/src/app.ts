@@ -6,6 +6,8 @@ import { notFoundError } from './errors/AppError.js';
 import { requireAuth } from './middleware/auth.js';
 import { errorHandler } from './middleware/errorHandler.js';
 import { requestId } from './middleware/requestId.js';
+import { enforcePolicy } from './middleware/policy.js';
+import { openRouter as authOpenRouter, router as authRouter } from './modules/auth/router.js';
 import { router as customersRouter } from './modules/customers/router.js';
 import { router as draftsRouter } from './modules/drafts/router.js';
 import { router as evalsRouter } from './modules/evals/router.js';
@@ -41,9 +43,13 @@ export function createApp(): Express {
     res.json({ status: 'ok', version: APP_VERSION, ai_provider: env.AI_PROVIDER });
   });
 
-  // Every route under /api requires a bearer token; role checks are per-route.
+  // Every route under /api requires a bearer token (demo token or JWT) except POST /api/auth/login;
+  // per-route role policies live in middleware/policy.ts and are enforced once, here.
   const api = Router();
+  api.use(authOpenRouter);
   api.use(requireAuth);
+  api.use(enforcePolicy);
+  api.use(authRouter);
   api.use(ticketsRouter);
   api.use(customersRouter);
   api.use(ordersRouter);

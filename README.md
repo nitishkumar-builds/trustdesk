@@ -64,7 +64,7 @@ Or run both from the repo root with one command:
 npm install && npm run dev                # concurrently: server on :4000, web on :5173
 ```
 
-The root `package.json` also has `npm run seed` and `npm run eval`, which forward to the server package. Sign in to the UI with one of the three demo tokens using the header buttons (Agent / Manager / Admin); the API expects `Authorization: Bearer <token>`.
+The root `package.json` also has `npm run seed` and `npm run eval`, which forward to the server package. Sign in to the UI with one of the three demo tokens using the header buttons (Agent / Manager / Admin), or with **Log in** as `agent@`, `manager@` or `admin@trustdesk.local` (password `trustdesk-demo`), which stores a JWT; the API expects `Authorization: Bearer <token>` with either kind of token.
 
 ## Environment variables
 
@@ -83,6 +83,9 @@ All variables live in `server/.env` (copied from `server/.env.example`) and are 
 | `RETRIEVAL_MODE` | `fts` (baseline) or `hybrid` (FTS fused with embedding cosine similarity by reciprocal rank fusion) | `fts` | no |
 | `EMBEDDING_PROVIDER` | Which embedding fills `knowledge_chunk.embedding` at ingest: `local` (hashing-based, no network) or `openrouter` | `local` | no |
 | `OPENROUTER_EMBEDDING_MODEL` | Embedding model for `EMBEDDING_PROVIDER=openrouter` | `openai/text-embedding-3-small` | no |
+| `JWT_SECRET` | Signs the JWTs issued by `POST /api/auth/login` (min 16 chars; change it outside local demos) | `trustdesk-dev-jwt-secret-change-me` | no |
+| `JWT_TTL_SECONDS` | Lifetime of a login token | `43200` (12 h) | no |
+| `DEMO_USER_PASSWORD` | Password of the three seeded users `agent@` / `manager@` / `admin@trustdesk.local` | `trustdesk-demo` | no |
 | `AI_PRICE_TABLE_JSON` | Optional JSON object `{ "<model>": { "input_per_million", "output_per_million" } }` merged over the price table in `server/src/ai/pricing.ts` | unset (built-in table) | no |
 | `DEMO_AGENT_TOKEN` | Bearer token mapped to role `support_agent` | `agent-token-123` (from `.env.example`) | yes |
 | `DEMO_MANAGER_TOKEN` | Bearer token mapped to role `support_manager` | `manager-token-123` | yes |
@@ -99,11 +102,13 @@ Frontend (`web/.env`, optional, see `web/.env.example`): `VITE_API_BASE` (defaul
 
 ## API overview
 
-All routes below are mounted under `http://localhost:4000` and, except `GET /health`, require `Authorization: Bearer <token>`. `server/tests/auth.routes.test.ts` enumerates the registered Express router stack (`tests/helpers/routes.ts`) and asserts that this table lists exactly those routes with the right roles, so the documented API is the real one. "any" means any of the three roles.
+All routes below are mounted under `http://localhost:4000` and, except `GET /health` and `POST /api/auth/login`, require `Authorization: Bearer <token>` (a demo token or a login JWT). Role restrictions are declared once in `server/src/middleware/policy.ts`. `server/tests/auth.routes.test.ts` enumerates the registered Express router stack (`tests/helpers/routes.ts`) and asserts that this table lists exactly those routes with the right roles, so the documented API is the real one. "any" means any of the three roles.
 
 | Method | Path | Role | Purpose |
 |---|---|---|---|
 | GET | `/health` | none | Liveness: `{ status, version, ai_provider }` |
+| POST | `/api/auth/login` | none | Log in with email + password (seeded demo users); returns a JWT bearer token and the user |
+| GET | `/api/auth/me` | any | The user the bearer token (JWT or demo token) resolves to |
 | GET | `/api/tickets` | any | List tickets (`status`, `category` = latest triage, `page`, `pageSize`) |
 | GET | `/api/tickets/:ticketId` | any | Ticket with customer, order, policy context (as of `created_at`), latest triage, drafts, tool actions |
 | POST | `/api/tickets` | any | Create a ticket for an existing customer (and optionally their order) |
@@ -159,6 +164,7 @@ The full append-only log is the "Decisions" section of `CLAUDE.md` (D-000 onward
 Good-To-Have decisions (Phase 11):
 
 - **Feedback (item 2).** `POST /api/feedback` stores a 1–5 rating with an optional reason and corrected response against a ticket and, optionally, one of its drafts (the draft must belong to the ticket); `GET /api/feedback?ticket_id=` lists newest first with the average. In the ticket page, thumbs up/down under the draft map to ratings 5 and 1, the comment box is the reason, and an unsaved edit of the draft text is submitted as the corrected response. Feedback is stored for later analysis only; nothing reads it back into a prompt.
+- **Full RBAC (item 4).** A `user` table (scrypt password hashes via Node's crypto, no extra dependency) and `POST /api/auth/login` issuing a signed JWT (`jsonwebtoken`, HS256, `JWT_SECRET`, issuer `trustdesk`, `JWT_TTL_SECONDS`). `requireAuth` accepts either a login JWT or one of the three static demo tokens, so every README command and test keeps working; the seeded users are the same identities the demo tokens resolve to. Per-route role policies were moved out of the routers into one map, `ROUTE_POLICIES` in `middleware/policy.ts`, enforced by `enforcePolicy` right after `requireAuth` (unlisted routes are open to any authenticated role; the four listed ones name their roles). Role changes take effect when a token expires — the JWT is trusted without a per-request user lookup.
 - **Hybrid retrieval (item 3).** `RETRIEVAL_MODE=hybrid` adds a vector side to retrieval: each chunk gets an embedding at ingest (`EMBEDDING_PROVIDER=local`, the default, is a deterministic hashing embedding — 256 hashed unigram/bigram buckets, not a neural model; `openrouter` calls the OpenRouter embeddings endpoint with `OPENROUTER_EMBEDDING_MODEL` and fails loudly rather than falling back, so `knowledge_chunk.embedding_model` always names what is active), stored as a plain `double precision[]` column (no pgvector). At query time the FTS ranking and the cosine ranking are fused with reciprocal rank fusion (k = 60) and the category prior is applied on top. The default stays `fts`, so the committed eval baseline does not move; `npm run eval -- --compare-retrieval` measures both modes on the same cases and writes the comparison table into `reports/EVALUATION_REPORT.md` (on the local embedding both modes score 1.000 everywhere, which says more about the eight cases and the category prior than about the embedding).
 - **Observability (item 1).** Every model call already recorded `model_name`, `prompt_version`, `latency_ms` and `token_usage`; the adapter factory now attaches `cost_estimate` from a small price table (`server/src/ai/pricing.ts`, USD per million tokens, approximate list prices, overridable with `AI_PRICE_TABLE_JSON`; unknown models are reported as *unpriced* rather than guessed). `GET /api/metrics/summary` aggregates `agent_run` — runs per type and status, nearest-rank p50/p95/max latency overall and per type, prompt/completion tokens per model, estimated cost — with optional `since` and `ticket_id` windows, and the `/metrics` page renders it.
 
@@ -168,7 +174,7 @@ Other choices worth knowing: policy windows are always computed as of the ticket
 
 Guardrail layers, in the order a request meets them:
 
-1. **Authentication and roles** — every `/api` route requires a bearer token; approval of tool actions needs `support_manager` or `admin`; document ingest and eval runs need `admin`.
+1. **Authentication and roles** — every `/api` route except login requires a bearer token (a JWT from `POST /api/auth/login` or a static demo token); approval of tool actions needs `support_manager` or `admin`; document ingest and eval runs need `admin`. The role map lives in `server/src/middleware/policy.ts`.
 2. **Input scan** of the customer message against six pattern groups (`guardrails/patterns.ts`), whole-phrase and case-insensitive with a `*` wildcard: `INSTRUCTION_OVERRIDE` ("ignore all instructions", "system override", "you are now allowed"…), `SECRET_EXFIL` ("system prompt", "api key", "internal notes", "print your"…), `CONCEALMENT` ("do not mention", "hide this from"…), `IDENTITY_BYPASS` ("ignore identity", "skip verification"…), `PRIVILEGE_ESCALATION` ("issue me a * coupon", "approve every refund"…), `PII_REQUEST` ("other customers", "full card number", "otp"…). The first four are high severity on their own.
 3. **Retrieval quarantine** — `KB-ADVERSARIAL-001` is ingested for auditability but stored with `quarantined = true`; every retrieval query excludes it, so it is never grounding context and never a citation. Documents ingested through the API are quarantined when their id contains `ADVERSARIAL` or their text matches the override/concealment groups.
 4. **Document trust** — each retrieved chunk (heading and body) is scanned with the same groups; quoted text is exempt so the security playbook can quote attacks. Rejected chunks never reach a prompt or a citation and are recorded as `document_findings` in the trace.
@@ -187,7 +193,7 @@ The three adversarial eval cases and what happens: **`tkt_9005` / eval_005** ask
 - **The mock adapter's determinism means the eval scores are not a measure of a real model's quality.** All committed numbers (1.000 across the board) measure the pipeline's rules, retrieval and guardrails with a rule-based "model"; a live run with OpenRouter is a different measurement and was only spot-checked by hand.
 - **Answer-requirement checks are keyword proxies.** "Ask for a photo", "flag the unsafe instruction" and "ignore the bypass instruction" are checked with regular expressions over the draft (`evals/answerRequirements.ts`); a reply can satisfy a check without being good, and three requirements are explicitly labelled `proxy` in the report.
 - **No multi-tenancy** — one organisation, one knowledge base, no tenant scoping on any table or route.
-- **No rate limiting**, no request size policy beyond a 1 MB JSON body, and the three static demo tokens are the whole identity system (no users, no login flow, no expiry).
+- **No rate limiting** and no request size policy beyond a 1 MB JSON body. Identity is a demo: three seeded users with one shared default password, HS256 JWTs trusted until expiry (no revocation, no refresh, no lockout), and the static demo tokens never expire.
 - **Single-process background eval runs.** `POST /api/eval-runs` runs inside the API process: an error marks the row `failed`, but a process restart mid-run leaves that row `running` forever, and there is no queue, retry or worker.
 - The local hashing embedding is a lexical trick, not semantics: hybrid mode with `EMBEDDING_PROVIDER=local` cannot match synonyms or paraphrases, and the fts-vs-hybrid table is identical on the eight cases because the category prior decides the required citation in both modes.
 - The mock provider only understands the seeded scenarios: a new ticket about, say, a missing invoice will be classified by fallback rules and drafted generically.
@@ -211,17 +217,17 @@ trustdesk/
 ├── reports/                      EVALUATION_REPORT.md (committed) + eval-run-<id>.json (git-ignored)
 ├── server/                       Express + Prisma API
 │   ├── .env.example              every environment variable with its default
-│   ├── prisma/                   schema.prisma + migrations (init, add_fts, add_embeddings)
+│   ├── prisma/                   schema.prisma + migrations (init, add_fts, add_embeddings, add_users)
 │   ├── src/
 │   │   ├── index.ts, app.ts      boot; middleware, /health, /api routers, error handler
 │   │   ├── config/               env.ts (Zod-validated), paths.ts
-│   │   ├── middleware/           requestId, auth (requireAuth, requireRole), errorHandler, asyncHandler
+│   │   ├── middleware/           requestId, auth (requireAuth: demo token or JWT), policy (route → roles map), errorHandler, asyncHandler
 │   │   ├── db/                   Prisma client, prefixed cuid2 ids
 │   │   ├── domain/               policyWindows.ts (return window, warranty), businessDays.ts
 │   │   ├── ai/                   adapter types, mockAdapter, openRouterAdapter, pricing.ts (cost table), prompts/triage.v1, draftReply.v1
 │   │   ├── guardrails/           patterns, inputScanner, documentTrust, policy (decision table), refusalTemplates, outputScanner, selfTest
 │   │   ├── seed/seed.ts          idempotent loader for data/ (--reset truncates first)
-│   │   └── modules/              tickets, customers, orders, knowledge (+ embeddings.ts, localEmbedding.ts), triage, drafts, toolActions (+ executors/), traces, evals, metrics, feedback
+│   │   └── modules/              auth (login, JWT, passwords), tickets, customers, orders, knowledge (+ embeddings.ts, localEmbedding.ts), triage, drafts, toolActions (+ executors/), traces, evals, metrics, feedback
 │   └── tests/                    Vitest + Supertest: unit, API, contract, auth enumeration, integration/demoFlow
 └── web/                          React 18 + Vite + TypeScript, plain CSS
     ├── vite.config.ts            proxies /api and /health to :4000

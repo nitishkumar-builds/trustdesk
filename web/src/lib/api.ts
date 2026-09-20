@@ -136,6 +136,10 @@ export const api = {
 
   metricsSummary: () => get<MetricsSummary>('/metrics/summary'),
 
+  // Phase 11 item 4: JWT login (the demo-token buttons keep working as a fallback)
+  login: (email: string, password: string) =>
+    post<{ token: string; token_type: 'Bearer'; expires_in: number; user: { user_id: string; email: string; name: string; role: string } }>('/auth/login', { email, password }),
+
   listFeedback: (ticketId: string) => get<{ items: Feedback[]; total: number; average_rating: number | null }>(`/feedback?ticket_id=${enc(ticketId)}`),
   createFeedback: (body: { ticket_id: string; draft_id?: string; rating: number; reason?: string; corrected_response?: string }) => post<Feedback>('/feedback', body),
 }

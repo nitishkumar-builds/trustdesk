@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { asyncHandler } from '../../middleware/asyncHandler.js';
-import { getPrincipal, requireRole } from '../../middleware/auth.js';
+import { getPrincipal } from '../../middleware/auth.js';
 import { actionIdParamSchema, approveBodySchema, listActionsQuerySchema, requestActionBodySchema } from './schemas.js';
 import { approveAction, executeAction, getAction, listActions, listCatalog, requestAction } from './service.js';
 
@@ -25,10 +25,9 @@ router.post(
   }),
 );
 
-// POST /api/tool-actions/:actionId/approve  [support_manager or admin ONLY]
+// POST /api/tool-actions/:actionId/approve  [support_manager or admin ONLY — middleware/policy.ts]
 router.post(
   '/tool-actions/:actionId/approve',
-  requireRole('support_manager', 'admin'),
   asyncHandler(async (req, res) => {
     const { actionId } = actionIdParamSchema.parse(req.params);
     const body = approveBodySchema.parse(req.body);

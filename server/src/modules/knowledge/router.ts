@@ -1,6 +1,5 @@
 import { Router } from 'express';
 import { asyncHandler } from '../../middleware/asyncHandler.js';
-import { requireRole } from '../../middleware/auth.js';
 import { docIdParamSchema, ingestBodySchema, searchQuerySchema } from './schemas.js';
 import { searchKnowledge } from './search.js';
 import { getDocument, ingestDocuments, listDocuments, reingestFromDisk } from './service.js';
@@ -8,20 +7,18 @@ import { getDocument, ingestDocuments, listDocuments, reingestFromDisk } from '.
 // Mounted under /api by app.ts (requireAuth already applied).
 export const router = Router();
 
-// POST /api/documents/ingest  [admin]
+// POST /api/documents/ingest  [admin — middleware/policy.ts]
 router.post(
   '/documents/ingest',
-  requireRole('admin'),
   asyncHandler(async (req, res) => {
     const { documents } = ingestBodySchema.parse(req.body);
     res.json(await ingestDocuments(documents));
   }),
 );
 
-// POST /api/documents/reingest  [admin] — re-runs the loader over data/knowledge_base/
+// POST /api/documents/reingest  [admin — middleware/policy.ts] — re-runs the loader over data/knowledge_base/
 router.post(
   '/documents/reingest',
-  requireRole('admin'),
   asyncHandler(async (_req, res) => {
     res.json(await reingestFromDisk());
   }),

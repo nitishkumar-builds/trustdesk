@@ -286,3 +286,15 @@ model Feedback {
   @@index([ticketId])
   @@map("feedback")
 }
+
+// Phase 11 item 4: login users (support_agent | support_manager | admin); password hashes are scrypt.
+model User {
+  userId       String   @id @map("user_id")
+  email        String   @unique
+  name         String
+  role         String
+  passwordHash String   @map("password_hash")
+  createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  @@map("user")
+}

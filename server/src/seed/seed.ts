@@ -14,6 +14,8 @@ import { prisma } from '../db/prisma.js';
 import { DATA_DIR, KNOWLEDGE_BASE_DIR, REPO_ROOT } from '../config/paths.js';
 import { loadKnowledgeBase } from '../modules/knowledge/loader.js';
 import { persistParsedDocument } from '../modules/knowledge/service.js';
+import { hashPassword } from '../modules/auth/passwords.js';
+import { env } from '../config/env.js';
 
 interface RawCustomer {
   customer_id: string;
@@ -93,6 +95,7 @@ async function readJsonl<T>(file: string): Promise<T[]> {
 
 // Truncation order does not matter with CASCADE; RESTART IDENTITY is harmless (no serials).
 const ALL_TABLES = [
+  'user',
   'feedback',
   'eval_run',
   'eval_case',
@@ -113,6 +116,20 @@ const ALL_TABLES = [
 async function resetDatabase(): Promise<void> {
   const list = ALL_TABLES.map((t) => `"${t}"`).join(', ');
   await prisma.$executeRawUnsafe(`TRUNCATE TABLE ${list} RESTART IDENTITY CASCADE`);
+}
+
+// Phase 11 item 4: the three demo identities as login users (same ids the demo tokens resolve to).
+export const DEMO_USERS = [
+  { userId: 'usr_agent', email: 'agent@trustdesk.local', name: 'Demo Agent', role: 'support_agent' },
+  { userId: 'usr_manager', email: 'manager@trustdesk.local', name: 'Demo Manager', role: 'support_manager' },
+  { userId: 'usr_admin', email: 'admin@trustdesk.local', name: 'Demo Admin', role: 'admin' },
+] as const;
+
+async function seedUsers(): Promise<void> {
+  for (const u of DEMO_USERS) {
+    const data = { email: u.email, name: u.name, role: u.role, passwordHash: hashPassword(env.DEMO_USER_PASSWORD) };
+    await prisma.user.upsert({ where: { userId: u.userId }, create: { userId: u.userId, ...data }, update: data });
+  }
 }
 
 async function seedCustomers(): Promise<void> {
@@ -234,6 +251,7 @@ async function seedKnowledgeBase(): Promise<void> {
 
 async function printSummary(): Promise<void> {
   const rows = [
+    { entity: 'users', count: await prisma.user.count() },
     { entity: 'customers', count: await prisma.customer.count() },
     { entity: 'orders', count: await prisma.order.count() },
     { entity: 'tickets', count: await prisma.ticket.count() },
@@ -253,6 +271,7 @@ async function main(): Promise<void> {
 
   if (reset) await resetDatabase();
 
+  await seedUsers();
   await seedCustomers();
   await seedOrders();
   await seedTickets();

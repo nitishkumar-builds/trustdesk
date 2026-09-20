@@ -1,16 +1,15 @@
 import { Router } from 'express';
 import { asyncHandler } from '../../middleware/asyncHandler.js';
-import { getPrincipal, requireRole } from '../../middleware/auth.js';
+import { getPrincipal } from '../../middleware/auth.js';
 import { evalRunIdParamSchema, listEvalRunsQuerySchema, startEvalRunBodySchema } from './schemas.js';
 import { getEvalRun, listEvalRuns, startEvalRun } from './service.js';
 
 // Mounted under /api by app.ts (requireAuth applied).
 export const router = Router();
 
-// POST /api/eval-runs  [admin ONLY] -> 202 { eval_run_id, status: 'running' }; completes in the background
+// POST /api/eval-runs  [admin ONLY — middleware/policy.ts] -> 202 { eval_run_id, status: 'running' }; completes in the background
 router.post(
   '/eval-runs',
-  requireRole('admin'),
   asyncHandler(async (req, res) => {
     const body = startEvalRunBodySchema.parse(req.body);
     res.status(202).json(await startEvalRun(body, getPrincipal(req)));
