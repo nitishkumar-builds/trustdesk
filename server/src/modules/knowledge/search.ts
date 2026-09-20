@@ -1,7 +1,11 @@
+import { env } from '../../config/env.js';
 import { prisma } from '../../db/prisma.js';
 import { CATEGORY_PRIOR_BOOST, priorDocIdFor } from './categoryPriors.js';
+import { getEmbeddingProvider } from './embeddings.js';
+import { cosineSimilarity } from './localEmbedding.js';
 
-export type SearchSource = 'fts' | 'trigram' | 'category_prior';
+export type SearchSource = 'fts' | 'trigram' | 'category_prior' | 'vector' | 'hybrid';
+export type RetrievalMode = 'fts' | 'hybrid';
 
 export interface SearchResult {
   doc_id: string;
@@ -23,11 +27,19 @@ export interface SearchKnowledgeInput {
   limit?: number;
   /** Rule R4: only the Phase 5 guardrail self-test may pass true. */
   includeQuarantined?: boolean;
+  /** fts (default = env.RETRIEVAL_MODE) or hybrid: FTS ranking fused with embedding cosine similarity (RRF). */
+  mode?: RetrievalMode;
 }
 
 export interface SearchKnowledgeOutput {
   results: SearchResult[];
+  mode: RetrievalMode;
 }
+
+// Reciprocal rank fusion constant (Cormack et al. 2009); 60 is the conventional value.
+export const RRF_K = 60;
+// How many nearest chunks the vector side contributes before fusion.
+const VECTOR_CANDIDATES = 8;
 
 interface Row {
   chunk_id: string;
@@ -61,7 +73,8 @@ export async function searchKnowledge(input: SearchKnowledgeInput): Promise<Sear
   const query = input.query.trim();
   const limit = Math.max(1, Math.min(input.limit ?? 5, 50));
   const includeQuarantined = input.includeQuarantined === true;
-  if (query === '') return { results: [] };
+  const mode: RetrievalMode = input.mode ?? env.RETRIEVAL_MODE;
+  if (query === '') return { results: [], mode };
 
   const merged = new Map<string, SearchResult>();
   const add = (row: Row, source: SearchSource) => {
@@ -88,6 +101,17 @@ export async function searchKnowledge(input: SearchKnowledgeInput): Promise<Sear
     trigramRows.forEach((r) => add(r, 'trigram'));
   }
 
+  // Stage B' — hybrid: fuse the lexical ranking with embedding cosine similarity (reciprocal rank
+  // fusion). Scores become RRF scores (same scale for both lists), so the category-prior boost
+  // below still dominates. Default mode is fts, so the eval baseline does not move (D-071).
+  if (mode === 'hybrid') {
+    const vectorRows = await vectorStage(query, includeQuarantined, VECTOR_CANDIDATES);
+    const lexical = [...merged.values()].sort((a, b) => b.score - a.score);
+    const fused = fuseByReciprocalRank(lexical, vectorRows);
+    merged.clear();
+    for (const r of fused) merged.set(r.chunk_id, r);
+  }
+
   // Stage C — category prior.
   const priorDocId = priorDocIdFor(input.categoryHint);
   if (priorDocId) {
@@ -108,7 +132,58 @@ export async function searchKnowledge(input: SearchKnowledgeInput): Promise<Sear
   }
 
   const results = [...merged.values()].sort((a, b) => b.score - a.score).slice(0, limit);
-  return { results };
+  return { results, mode };
+}
+
+/**
+ * Reciprocal rank fusion of the lexical list and the vector list: score = Σ 1 / (RRF_K + rank),
+ * ranks starting at 1 in each list. A chunk present in both lists gets source 'hybrid'.
+ */
+export function fuseByReciprocalRank(lexical: SearchResult[], vector: SearchResult[]): SearchResult[] {
+  const fused = new Map<string, SearchResult>();
+  const bump = (list: SearchResult[], source: SearchSource) => {
+    list.forEach((r, i) => {
+      const contribution = 1 / (RRF_K + i + 1);
+      const existing = fused.get(r.chunk_id);
+      if (existing) {
+        existing.score = round(existing.score + contribution);
+        existing.source = 'hybrid';
+      } else {
+        fused.set(r.chunk_id, { ...r, score: round(contribution), source });
+      }
+    });
+  };
+  bump(lexical, lexical[0]?.source ?? 'fts');
+  bump(vector, 'vector');
+  return [...fused.values()].sort((a, b) => b.score - a.score);
+}
+
+// Vector side of hybrid retrieval: the query is embedded with the same provider that embedded the
+// chunks at ingest; cosine similarity is computed in Node over the (small) chunk set.
+async function vectorStage(query: string, includeQuarantined: boolean, limit: number): Promise<SearchResult[]> {
+  const provider = getEmbeddingProvider();
+  const { vectors } = await provider.embed([query]);
+  const q = vectors[0] ?? [];
+  const chunks = await prisma.knowledgeChunk.findMany({
+    where: { ...(includeQuarantined ? {} : { document: { quarantined: false } }), embeddingModel: provider.model },
+    select: { id: true, docId: true, heading: true, content: true, embedding: true, document: { select: { title: true, trustLevel: true, quarantined: true } } },
+  });
+  return chunks
+    .map((c) => ({
+      doc_id: c.docId,
+      title: c.document.title,
+      chunk_id: c.id,
+      heading: c.heading,
+      snippet: c.content.slice(0, 240),
+      content: c.content,
+      score: round(cosineSimilarity(q, c.embedding)),
+      source: 'vector' as SearchSource,
+      trust_level: c.document.trustLevel,
+      quarantined: c.document.quarantined,
+    }))
+    .filter((r) => r.score > 0)
+    .sort((a, b) => b.score - a.score || a.chunk_id.localeCompare(b.chunk_id))
+    .slice(0, limit);
 }
 
 function toResult(row: Row, source: SearchSource): SearchResult {

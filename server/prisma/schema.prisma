@@ -116,6 +116,9 @@ model KnowledgeChunk {
   // The dbgenerated() expression and the two GIN indexes mirror that migration exactly so
   // `prisma migrate dev` sees no drift (Prisma cannot express GENERATED ALWAYS itself).
   searchVector Unsupported("tsvector")? @default(dbgenerated("to_tsvector('english'::regconfig, ((COALESCE(heading, ''::text) || ' '::text) || content))")) @map("search_vector")
+  // Phase 11 item 3: hashing-based or OpenRouter embedding of heading + content (empty when never computed).
+  embedding      Float[]  @default([])
+  embeddingModel String?  @map("embedding_model")
 
   document KnowledgeDocument @relation(fields: [docId], references: [docId], onDelete: Cascade)
 

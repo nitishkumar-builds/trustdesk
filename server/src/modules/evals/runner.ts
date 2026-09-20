@@ -29,6 +29,9 @@ import {
   type EvalRunResult,
   type RunMetadata,
   type StoredMetrics,
+  type RetrievalComparison,
+  type RetrievalModeName,
+  type EvalMetrics,
 } from './types.js';
 
 /** Synthetic actor for CLI runs; AgentRun has no actor column, so it only feeds the pipeline's signature. */
@@ -37,6 +40,10 @@ export const EVAL_PRINCIPAL: Principal = { userId: 'usr_eval_runner', role: 'adm
 export interface RunEvalsOptions {
   caseIds?: string[];
   provider?: AiProviderName;
+  /** Retrieval mode for every triage/draft call of the run (default env.RETRIEVAL_MODE). */
+  retrievalMode?: RetrievalModeName;
+  /** Also run the other retrieval mode (not persisted) and store an fts-vs-hybrid comparison in run_metadata. */
+  compareRetrieval?: boolean;
   /** Write the EvalRun row and the two report files (default true). */
   persist?: boolean;
   /** Directory for eval-run-<id>.json and EVALUATION_REPORT.md (default reports/ at the repo root). */
@@ -64,6 +71,7 @@ export class ReportWriteError extends Error {
 interface SharedContext {
   evalRunId: string;
   provider: AiProviderName;
+  retrievalMode: RetrievalModeName;
   principal: Principal;
   tools: ToolDefinition[];
   secrets: string[];
@@ -97,6 +105,7 @@ export async function loadEvalCases(caseIds?: string[]): Promise<EvalCaseInput[]
 
 export async function runEvals(options: RunEvalsOptions = {}): Promise<EvalRunResult> {
   const provider = options.provider ?? 'mock';
+  const retrievalMode: RetrievalModeName = options.retrievalMode ?? env.RETRIEVAL_MODE;
   const persist = options.persist ?? true;
   const principal = options.principal ?? EVAL_PRINCIPAL;
   const outDir = options.outDir ?? REPORTS_DIR;
@@ -115,6 +124,7 @@ export async function runEvals(options: RunEvalsOptions = {}): Promise<EvalRunRe
     const shared: SharedContext = {
       evalRunId,
       provider,
+      retrievalMode,
       principal,
       tools: await prisma.toolDefinition.findMany({ orderBy: { toolName: 'asc' } }),
       secrets: secretValues(),
@@ -126,9 +136,34 @@ export async function runEvals(options: RunEvalsOptions = {}): Promise<EvalRunRe
       details.push(detail);
     }
 
+    // Optional fts-vs-hybrid comparison: the other mode runs the same cases without persisting a row.
+    let comparison: RetrievalComparison | null = null;
+    if (options.compareRetrieval) {
+      const otherMode: RetrievalModeName = retrievalMode === 'fts' ? 'hybrid' : 'fts';
+      const other = await runEvals({ caseIds, provider, retrievalMode: otherMode, persist: false, principal });
+      const mine = computeMetrics(details.map((d) => ({ expected: d.expected, checks: d.checks, answer_requirement_fraction: d.answer_requirement_fraction })));
+      const byMode = { [retrievalMode]: mine, [otherMode]: other.metrics ?? mine } as Record<RetrievalModeName, EvalMetrics>;
+      const chunk = await prisma.knowledgeChunk.findFirst({ select: { embeddingModel: true } });
+      comparison = {
+        fts: byMode.fts,
+        hybrid: byMode.hybrid,
+        baseline_mode: retrievalMode,
+        embedding_model: chunk?.embeddingModel ?? null,
+        per_case: results.map((r) => {
+          const o = other.case_results.find((c) => c.case_id === r.case_id);
+          const mineRow = { passed: r.passed, citations: r.citations };
+          const otherRow = { passed: o?.passed ?? false, citations: o?.citations ?? [] };
+          const [f, h] = retrievalMode === 'fts' ? [mineRow, otherRow] : [otherRow, mineRow];
+          return { case_id: r.case_id, fts_passed: f.passed, hybrid_passed: h.passed, fts_citations: f.citations, hybrid_citations: h.citations };
+        }),
+      };
+    }
+
     const completedAt = new Date();
     const metadata: RunMetadata = {
       provider,
+      retrieval_mode: retrievalMode,
+      retrieval_comparison: comparison,
       model_names: unique(details.flatMap((d) => d.model_names)),
       prompt_versions: unique(details.flatMap((d) => d.prompt_versions)),
       case_ids: caseIds,
@@ -184,8 +219,8 @@ async function runCase(evalCase: EvalCaseInput, shared: SharedContext): Promise<
   const adapter = observingAdapter(getAiAdapter(shared.provider), observation);
 
   // 1. Real triage. 2. Real draft (it reuses the triage result just written).
-  const triage = await triageTicket(evalCase.ticketId, shared.principal, { provider: shared.provider, adapter });
-  const draft = await generateDraft(evalCase.ticketId, shared.principal, { provider: shared.provider, adapter });
+  const triage = await triageTicket(evalCase.ticketId, shared.principal, { provider: shared.provider, adapter, retrievalMode: shared.retrievalMode });
+  const draft = await generateDraft(evalCase.ticketId, shared.principal, { provider: shared.provider, adapter, retrievalMode: shared.retrievalMode });
 
   // 4. Rule R2: none of the prompts the two calls sent may carry expected data.
   assertNoExpectationLeak(observation.requests, evalCase);

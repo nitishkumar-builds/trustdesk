@@ -18,6 +18,7 @@ export const searchQuerySchema = z.object({
   q: z.string().trim().min(1).max(1000),
   category: z.string().min(1).optional(),
   limit: z.coerce.number().int().min(1).max(50).default(5),
+  mode: z.enum(['fts', 'hybrid']).optional(),
 });
 
 export const docIdParamSchema = z.object({ docId: z.string().min(1) });

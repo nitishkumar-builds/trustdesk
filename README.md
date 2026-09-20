@@ -80,6 +80,9 @@ All variables live in `server/.env` (copied from `server/.env.example`) and are 
 | `OPENROUTER_BASE_URL` | OpenRouter base URL | `https://openrouter.ai/api/v1` | no |
 | `OPENROUTER_MODEL` | Model id sent to OpenRouter | `google/gemini-2.0-flash-001` | no (see below) |
 | `OPENROUTER_TIMEOUT_MS` | Per-request timeout for the live model | `30000` | no |
+| `RETRIEVAL_MODE` | `fts` (baseline) or `hybrid` (FTS fused with embedding cosine similarity by reciprocal rank fusion) | `fts` | no |
+| `EMBEDDING_PROVIDER` | Which embedding fills `knowledge_chunk.embedding` at ingest: `local` (hashing-based, no network) or `openrouter` | `local` | no |
+| `OPENROUTER_EMBEDDING_MODEL` | Embedding model for `EMBEDDING_PROVIDER=openrouter` | `openai/text-embedding-3-small` | no |
 | `AI_PRICE_TABLE_JSON` | Optional JSON object `{ "<model>": { "input_per_million", "output_per_million" } }` merged over the price table in `server/src/ai/pricing.ts` | unset (built-in table) | no |
 | `DEMO_AGENT_TOKEN` | Bearer token mapped to role `support_agent` | `agent-token-123` (from `.env.example`) | yes |
 | `DEMO_MANAGER_TOKEN` | Bearer token mapped to role `support_manager` | `manager-token-123` | yes |
@@ -109,7 +112,7 @@ All routes below are mounted under `http://localhost:4000` and, except `GET /hea
 | GET | `/api/orders/:orderId` | any | Order with customer and matching tickets |
 | POST | `/api/documents/ingest` | admin | Ingest documents from the request body (`KB-*` ids preserved; injections quarantined) |
 | POST | `/api/documents/reingest` | admin | Re-run the loader over `data/knowledge_base/` |
-| GET | `/api/documents/search` | any | Chunk-level search (`q`, `category`, `limit`); quarantined docs never returned |
+| GET | `/api/documents/search` | any | Chunk-level search (`q`, `category`, `limit`, `mode` = fts or hybrid); quarantined docs never returned |
 | GET | `/api/documents` | any | List knowledge documents with trust level and quarantine flag |
 | GET | `/api/documents/:docId` | any | One document with its chunks |
 | POST | `/api/tickets/:ticketId/triage` | any | Run AI triage (category, priority, sentiment, escalation, fired rules); writes a trace |
@@ -136,7 +139,7 @@ Errors always use `{ "error": { "code", "message", "details" | null, "request_id
 
 ## Running evals
 
-- **CLI:** `cd server && npm run eval` (or `npm run eval` at the root). Options: `--provider mock|openrouter`, `--case eval_001 --case eval_006` (repeatable), `--out <dir>`. Prints a per-case table, the metric summary and the adversarial section; exits 1 when any adversarial case is unsafe or `citation_coverage < 1.0`.
+- **CLI:** `cd server && npm run eval` (or `npm run eval` at the root). Options: `--provider mock|openrouter`, `--case eval_001 --case eval_006` (repeatable), `--out <dir>`, `--retrieval fts|hybrid`, `--compare-retrieval` (also runs the other retrieval mode, unpersisted, and writes the fts-vs-hybrid table into the report). Prints a per-case table, the metric summary and the adversarial section; exits 1 when any adversarial case is unsafe or `citation_coverage < 1.0`.
 - **Endpoint:** `POST /api/eval-runs` with the admin token (`{"provider": "mock"}`), then poll `GET /api/eval-runs/:evalRunId` until `status` is `completed`; the Evals page in the UI does exactly this.
 - **Where the report lands:** every persisted run writes `reports/eval-run-<id>.json` (git-ignored) and regenerates `reports/EVALUATION_REPORT.md` (committed). The markdown's last section, "Prompt/retrieval/tooling changes made after evaluation", is hand-edited and preserved across runs. Each case also writes an `eval_case` trace readable at `GET /api/agent-runs?run_type=eval_case`.
 - **Tests:** `cd server && npm test` (needs the database up and seeded), or `npm run test:ci`, which applies migrations, reseeds with `--reset` and runs the suite from a clean database.
@@ -156,6 +159,7 @@ The full append-only log is the "Decisions" section of `CLAUDE.md` (D-000 onward
 Good-To-Have decisions (Phase 11):
 
 - **Feedback (item 2).** `POST /api/feedback` stores a 1–5 rating with an optional reason and corrected response against a ticket and, optionally, one of its drafts (the draft must belong to the ticket); `GET /api/feedback?ticket_id=` lists newest first with the average. In the ticket page, thumbs up/down under the draft map to ratings 5 and 1, the comment box is the reason, and an unsaved edit of the draft text is submitted as the corrected response. Feedback is stored for later analysis only; nothing reads it back into a prompt.
+- **Hybrid retrieval (item 3).** `RETRIEVAL_MODE=hybrid` adds a vector side to retrieval: each chunk gets an embedding at ingest (`EMBEDDING_PROVIDER=local`, the default, is a deterministic hashing embedding — 256 hashed unigram/bigram buckets, not a neural model; `openrouter` calls the OpenRouter embeddings endpoint with `OPENROUTER_EMBEDDING_MODEL` and fails loudly rather than falling back, so `knowledge_chunk.embedding_model` always names what is active), stored as a plain `double precision[]` column (no pgvector). At query time the FTS ranking and the cosine ranking are fused with reciprocal rank fusion (k = 60) and the category prior is applied on top. The default stays `fts`, so the committed eval baseline does not move; `npm run eval -- --compare-retrieval` measures both modes on the same cases and writes the comparison table into `reports/EVALUATION_REPORT.md` (on the local embedding both modes score 1.000 everywhere, which says more about the eight cases and the category prior than about the embedding).
 - **Observability (item 1).** Every model call already recorded `model_name`, `prompt_version`, `latency_ms` and `token_usage`; the adapter factory now attaches `cost_estimate` from a small price table (`server/src/ai/pricing.ts`, USD per million tokens, approximate list prices, overridable with `AI_PRICE_TABLE_JSON`; unknown models are reported as *unpriced* rather than guessed). `GET /api/metrics/summary` aggregates `agent_run` — runs per type and status, nearest-rank p50/p95/max latency overall and per type, prompt/completion tokens per model, estimated cost — with optional `since` and `ticket_id` windows, and the `/metrics` page renders it.
 
 Other choices worth knowing: policy windows are always computed as of the ticket's `created_at` (rule R1); tool executors are simulated; the eval report keeps the exact case-result shape from `docs/EVALUATION_GUIDE.md` and stores diagnostics beside it; the frontend derives the role label from the token so the header can never claim a role the token lacks.
@@ -185,6 +189,7 @@ The three adversarial eval cases and what happens: **`tkt_9005` / eval_005** ask
 - **No multi-tenancy** — one organisation, one knowledge base, no tenant scoping on any table or route.
 - **No rate limiting**, no request size policy beyond a 1 MB JSON body, and the three static demo tokens are the whole identity system (no users, no login flow, no expiry).
 - **Single-process background eval runs.** `POST /api/eval-runs` runs inside the API process: an error marks the row `failed`, but a process restart mid-run leaves that row `running` forever, and there is no queue, retry or worker.
+- The local hashing embedding is a lexical trick, not semantics: hybrid mode with `EMBEDDING_PROVIDER=local` cannot match synonyms or paraphrases, and the fts-vs-hybrid table is identical on the eight cases because the category prior decides the required citation in both modes.
 - The mock provider only understands the seeded scenarios: a new ticket about, say, a missing invoice will be classified by fallback rules and drafted generically.
 - Retrieval is chunk-level over eight documents; the trigram fallback almost never fires on chunk-sized text (similarity stays around 0.05), so it is a safety net rather than a real second stage.
 - Business days are Monday–Friday UTC with no holiday table; timestamps are interpreted in UTC everywhere.
@@ -206,7 +211,7 @@ trustdesk/
 ├── reports/                      EVALUATION_REPORT.md (committed) + eval-run-<id>.json (git-ignored)
 ├── server/                       Express + Prisma API
 │   ├── .env.example              every environment variable with its default
-│   ├── prisma/                   schema.prisma + migrations (init, add_fts)
+│   ├── prisma/                   schema.prisma + migrations (init, add_fts, add_embeddings)
 │   ├── src/
 │   │   ├── index.ts, app.ts      boot; middleware, /health, /api routers, error handler
 │   │   ├── config/               env.ts (Zod-validated), paths.ts
@@ -216,7 +221,7 @@ trustdesk/
 │   │   ├── ai/                   adapter types, mockAdapter, openRouterAdapter, pricing.ts (cost table), prompts/triage.v1, draftReply.v1
 │   │   ├── guardrails/           patterns, inputScanner, documentTrust, policy (decision table), refusalTemplates, outputScanner, selfTest
 │   │   ├── seed/seed.ts          idempotent loader for data/ (--reset truncates first)
-│   │   └── modules/              tickets, customers, orders, knowledge, triage, drafts, toolActions (+ executors/), traces, evals, metrics, feedback
+│   │   └── modules/              tickets, customers, orders, knowledge (+ embeddings.ts, localEmbedding.ts), triage, drafts, toolActions (+ executors/), traces, evals, metrics, feedback
 │   └── tests/                    Vitest + Supertest: unit, API, contract, auth enumeration, integration/demoFlow
 └── web/                          React 18 + Vite + TypeScript, plain CSS
     ├── vite.config.ts            proxies /api and /health to :4000

@@ -6,18 +6,46 @@ import { METRIC_DEFINITIONS, type CaseDetail, type CaseResult, type EvalMetrics,
 const repoRelative = (p: string | null): string => (p ? path.relative(REPO_ROOT, p).split(path.sep).join('/') : 'not written');
 
 export const MANUAL_SECTION_HEADING = '## Prompt/retrieval/tooling changes made after evaluation';
+export const RETRIEVAL_SECTION_HEADING = '## Retrieval mode comparison (fts vs hybrid)';
+const RETRIEVAL_SECTION_PLACEHOLDER =
+  '_No comparison in this run. Run `npm run eval -- --compare-retrieval` to measure fts against hybrid retrieval on the same cases; the table is kept here across plain runs._';
 export const MANUAL_SECTION_PLACEHOLDER =
   '_Placeholder (edit by hand): record here every prompt, retrieval or tooling change made after this evaluation, with the eval run id it was measured against. This section is preserved verbatim when the report is regenerated._';
 
-/** Returns the hand-edited content of the manual section from a previous report, or null when untouched. */
-export function extractManualSection(previous: string | null): string | null {
+/** Body of one `## ` section of a previous report (text up to the next `## ` heading), or null. */
+export function extractSection(previous: string | null, heading: string, placeholder: string): string | null {
   if (!previous) return null;
-  const start = previous.indexOf(MANUAL_SECTION_HEADING);
+  const start = previous.indexOf(heading);
   if (start < 0) return null;
-  const rest = previous.slice(start + MANUAL_SECTION_HEADING.length);
+  const rest = previous.slice(start + heading.length);
   const next = rest.search(/\n## /);
   const body = (next >= 0 ? rest.slice(0, next) : rest).trim();
-  return body.length > 0 && body !== MANUAL_SECTION_PLACEHOLDER ? body : null;
+  return body.length > 0 && body !== placeholder ? body : null;
+}
+
+/** Returns the hand-edited content of the manual section from a previous report, or null when untouched. */
+export function extractManualSection(previous: string | null): string | null {
+  return extractSection(previous, MANUAL_SECTION_HEADING, MANUAL_SECTION_PLACEHOLDER);
+}
+
+function renderRetrievalComparison(result: EvalRunResult, previousReport: string | null): string {
+  const c = result.run_metadata.retrieval_comparison;
+  if (!c) return extractSection(previousReport, RETRIEVAL_SECTION_HEADING, RETRIEVAL_SECTION_PLACEHOLDER) ?? RETRIEVAL_SECTION_PLACEHOLDER;
+  const metricTable = table(
+    ['Metric', 'fts', 'hybrid'],
+    (Object.keys(METRIC_DEFINITIONS) as Array<keyof EvalMetrics>).map((k) => [`\`${k}\``, pct(c.fts[k]), pct(c.hybrid[k])]),
+  );
+  const caseTable = table(
+    ['Case', 'fts', 'hybrid', 'Citations (fts)', 'Citations (hybrid)'],
+    c.per_case.map((p) => [p.case_id, p.fts_passed ? 'PASS' : 'FAIL', p.hybrid_passed ? 'PASS' : 'FAIL', list(p.fts_citations), list(p.hybrid_citations)]),
+  );
+  return [
+    `Measured by run \`${result.eval_run_id}\` (provider \`${result.provider}\`): the persisted results above used \`${c.baseline_mode}\`; the other mode ran the same cases in the same process without persisting a row. Hybrid = Postgres FTS ranking fused with embedding cosine similarity by reciprocal rank fusion (k = 60), then the category prior; embedding model \`${c.embedding_model ?? 'none'}\`${c.embedding_model === 'local-hash-v1' ? ' (hashing-based local embedding, not a neural model — see server/src/modules/knowledge/localEmbedding.ts)' : ''}. The default mode stays \`fts\` so the baseline does not move.`,
+    '',
+    metricTable,
+    '',
+    caseTable,
+  ].join('\n');
 }
 
 const cell = (value: unknown): string =>
@@ -152,6 +180,7 @@ export function renderEvaluationReport(result: EvalRunResult, previousReport: st
         ['eval_run_id', result.eval_run_id],
         ['status', result.status],
         ['provider', result.provider],
+        ['retrieval mode', result.run_metadata.retrieval_mode],
         ['model(s)', list(meta.model_names)],
         ['prompt versions', list(meta.prompt_versions)],
         ['started_at', result.started_at],
@@ -187,6 +216,10 @@ export function renderEvaluationReport(result: EvalRunResult, previousReport: st
     '',
     ...(failures.length > 0 ? failures : [`- No metric or answer-requirement failure in this run (${result.total_cases} cases, provider \`${result.provider}\`).`]),
     ...(caveats.length > 0 ? ['', '**Caveats**', '', ...caveats] : []),
+    '',
+    RETRIEVAL_SECTION_HEADING,
+    '',
+    renderRetrievalComparison(result, previousReport),
     '',
     MANUAL_SECTION_HEADING,
     '',

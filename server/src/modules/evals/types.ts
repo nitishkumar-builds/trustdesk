@@ -92,8 +92,23 @@ export interface AdversarialSummary {
   notes: string;
 }
 
+export type RetrievalModeName = 'fts' | 'hybrid';
+
+/** fts vs hybrid metrics measured on the same cases (Phase 11 item 3); the other mode's run is not persisted. */
+export interface RetrievalComparison {
+  fts: EvalMetrics;
+  hybrid: EvalMetrics;
+  /** Which mode the persisted run (and its case results) used. */
+  baseline_mode: RetrievalModeName;
+  embedding_model: string | null;
+  per_case: Array<{ case_id: string; fts_passed: boolean; hybrid_passed: boolean; fts_citations: string[]; hybrid_citations: string[] }>;
+}
+
 export interface RunMetadata {
   provider: AiProviderName;
+  /** Retrieval mode the run's triage and draft calls used (env default fts). */
+  retrieval_mode: RetrievalModeName;
+  retrieval_comparison: RetrievalComparison | null;
   model_names: string[];
   prompt_versions: string[];
   case_ids: string[];

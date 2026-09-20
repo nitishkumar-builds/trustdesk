@@ -13,6 +13,11 @@ const envSchema = z.object({
   OPENROUTER_TIMEOUT_MS: z.coerce.number().int().positive().default(30000),
   /** Optional JSON object { "<model>": { "input_per_million": n, "output_per_million": n } } merged over src/ai/pricing.ts. */
   AI_PRICE_TABLE_JSON: z.string().optional(),
+  /** Phase 11 item 3: fts (default, the eval baseline) or hybrid (FTS + embedding cosine fused with RRF). */
+  RETRIEVAL_MODE: z.enum(['fts', 'hybrid']).default('fts'),
+  /** Which embedding computes knowledge_chunk.embedding: local hashing (default, no network) or OpenRouter. */
+  EMBEDDING_PROVIDER: z.enum(['local', 'openrouter']).default('local'),
+  OPENROUTER_EMBEDDING_MODEL: z.string().default('openai/text-embedding-3-small'),
   DEMO_AGENT_TOKEN: z.string().min(1),
   DEMO_MANAGER_TOKEN: z.string().min(1),
   DEMO_ADMIN_TOKEN: z.string().min(1),

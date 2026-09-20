@@ -28,6 +28,8 @@ export function emptyStoredMetrics(provider: AiProviderName, caseIds: string[], 
     case_details: [],
     run_metadata: {
       provider,
+      retrieval_mode: 'fts',
+      retrieval_comparison: null,
       model_names: [],
       prompt_versions: [],
       case_ids: caseIds,

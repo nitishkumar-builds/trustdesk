@@ -3,6 +3,8 @@
 //   npm run eval -- --provider mock|openrouter   (default mock)
 //   npm run eval -- --case eval_001 --case eval_006   (repeatable; default all seeded cases)
 //   npm run eval -- --out reports/                (relative paths resolve against the repo root)
+//   npm run eval -- --retrieval fts|hybrid        (default env.RETRIEVAL_MODE = fts)
+//   npm run eval -- --compare-retrieval           (also run the other mode, unpersisted, and add the fts-vs-hybrid table)
 //
 // Exit code 1 when any adversarial case is unsafe, when citation_coverage < 1.0, or when the run fails.
 import path from 'node:path';
@@ -21,26 +23,29 @@ const yellow = paint('33');
 const bold = paint('1');
 const dim = paint('2');
 
-function parseCli(argv: string[]): { provider: 'mock' | 'openrouter'; caseIds?: string[]; outDir: string } {
+function parseCli(argv: string[]): { provider: 'mock' | 'openrouter'; caseIds?: string[]; outDir: string; retrievalMode?: 'fts' | 'hybrid'; compareRetrieval: boolean } {
   const { values } = parseArgs({
     args: argv,
     options: {
       provider: { type: 'string', default: 'mock' },
       case: { type: 'string', multiple: true },
       out: { type: 'string' },
+      retrieval: { type: 'string' },
+      'compare-retrieval': { type: 'boolean', default: false },
       help: { type: 'boolean', default: false },
     },
     strict: true,
   });
   if (values.help) {
-    process.stdout.write('Usage: npm run eval -- [--provider mock|openrouter] [--case eval_001 ...] [--out reports/]\n');
+    process.stdout.write('Usage: npm run eval -- [--provider mock|openrouter] [--case eval_001 ...] [--out reports/] [--retrieval fts|hybrid] [--compare-retrieval]\n');
     process.exit(0);
   }
   const provider = providerSchema.safeParse(values.provider);
   if (!provider.success) throw new Error(`--provider must be mock or openrouter (got "${String(values.provider)}")`);
+  if (values.retrieval !== undefined && values.retrieval !== 'fts' && values.retrieval !== 'hybrid') throw new Error(`--retrieval must be fts or hybrid (got "${String(values.retrieval)}")`);
   const caseIds = values.case && values.case.length > 0 ? values.case : undefined;
   const outDir = values.out ? path.resolve(REPO_ROOT, values.out) : REPORTS_DIR;
-  return { provider: provider.data, caseIds, outDir };
+  return { provider: provider.data, caseIds, outDir, retrievalMode: values.retrieval as 'fts' | 'hybrid' | undefined, compareRetrieval: values['compare-retrieval'] };
 }
 
 // Colour codes have zero width; strip them before measuring (built from a char code to keep lint happy).
@@ -102,16 +107,27 @@ function printAdversarial(result: EvalRunResult): void {
   }
 }
 
+function printRetrievalComparison(result: EvalRunResult): void {
+  const c = result.run_metadata.retrieval_comparison;
+  process.stdout.write(`\n${bold('Retrieval')} mode=${result.run_metadata.retrieval_mode}${c ? ` (embedding: ${c.embedding_model ?? 'none'})` : ''}\n`);
+  if (!c) return;
+  process.stdout.write(`  ${pad('metric', 28)} ${pad('fts', 8)} hybrid\n`);
+  for (const key of Object.keys(METRIC_DEFINITIONS) as Array<keyof EvalMetrics>) {
+    process.stdout.write(`  ${pad(key, 28)} ${pad(c.fts[key].toFixed(3), 8)} ${c.hybrid[key].toFixed(3)}\n`);
+  }
+}
+
 async function main(): Promise<number> {
   const cli = parseCli(process.argv.slice(2));
-  process.stdout.write(`${bold('TrustDesk eval')} provider=${cli.provider} cases=${cli.caseIds ? cli.caseIds.join(',') : 'all'}\n\n`);
+  process.stdout.write(`${bold('TrustDesk eval')} provider=${cli.provider} cases=${cli.caseIds ? cli.caseIds.join(',') : 'all'} retrieval=${cli.retrievalMode ?? 'env default'}${cli.compareRetrieval ? ' (+comparison with the other mode)' : ''}\n\n`);
 
-  const result = await runEvals({ caseIds: cli.caseIds, provider: cli.provider, persist: true, outDir: cli.outDir });
+  const result = await runEvals({ caseIds: cli.caseIds, provider: cli.provider, persist: true, outDir: cli.outDir, retrievalMode: cli.retrievalMode, compareRetrieval: cli.compareRetrieval });
 
   process.stdout.write(`${dim(`run ${result.eval_run_id} | model(s): ${result.run_metadata.model_names.join(', ') || 'n/a'} | prompts: ${result.run_metadata.prompt_versions.join(', ')} | ${result.run_metadata.duration_ms ?? 0} ms`)}\n\n`);
   printCaseTable(result);
   if (result.metrics) printMetrics(result.metrics);
   printAdversarial(result);
+  printRetrievalComparison(result);
 
   const unsafe = result.adversarial_summary.filter((a) => !a.safe).map((a) => a.case_id);
   const coverage = result.metrics?.citation_coverage ?? 0;

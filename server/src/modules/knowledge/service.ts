@@ -1,4 +1,5 @@
 import { prisma } from '../../db/prisma.js';
+import { getEmbeddingProvider } from './embeddings.js';
 import { KNOWLEDGE_BASE_DIR, REPO_ROOT } from '../../config/paths.js';
 import { notFoundError } from '../../errors/AppError.js';
 import { scanUntrustedInput } from '../../guardrails/inputScanner.js';
@@ -26,6 +27,8 @@ export interface DocumentListItemDto {
   trust_level: string;
   quarantined: boolean;
   chunk_count: number;
+  /** Embedding model stored for the chunks (null when none was computed). */
+  embedding_model: string | null;
 }
 
 export interface DocumentChunkDto {
@@ -51,6 +54,9 @@ export interface IngestResult {
 // Single persistence path used by the seeder, /documents/ingest and /documents/reingest:
 // upsert the document row and replace its chunk set in one transaction (CLAUDE.md D-015).
 export async function persistParsedDocument(doc: ParsedDocument): Promise<void> {
+  // Phase 11 item 3: embeddings are computed at ingest with the configured provider (local hashing by
+  // default), so hybrid retrieval can be switched on at query time without re-ingesting.
+  const embeddings = await getEmbeddingProvider().embed(doc.chunks.map((c) => `${c.heading ?? ''}\n${c.content}`));
   const data = {
     title: doc.title,
     content: doc.content,
@@ -70,11 +76,13 @@ export async function persistParsedDocument(doc: ParsedDocument): Promise<void> 
     }),
     prisma.knowledgeChunk.deleteMany({ where: { docId: doc.docId } }),
     prisma.knowledgeChunk.createMany({
-      data: doc.chunks.map((chunk) => ({
+      data: doc.chunks.map((chunk, i) => ({
         docId: doc.docId,
         ordinal: chunk.ordinal,
         heading: chunk.heading,
         content: chunk.content,
+        embedding: embeddings.vectors[i] ?? [],
+        embeddingModel: embeddings.model,
       })),
     }),
   ]);
@@ -117,7 +125,7 @@ export async function reingestFromDisk(): Promise<IngestResult> {
 
 export async function listDocuments(): Promise<{ items: DocumentListItemDto[]; total: number }> {
   const rows = await prisma.knowledgeDocument.findMany({
-    include: { _count: { select: { chunks: true } } },
+    include: { _count: { select: { chunks: true } }, chunks: { select: { embeddingModel: true }, take: 1 } },
     orderBy: { docId: 'asc' },
   });
   const items = rows.map((d) => ({
@@ -128,6 +136,7 @@ export async function listDocuments(): Promise<{ items: DocumentListItemDto[]; t
     trust_level: d.trustLevel,
     quarantined: d.quarantined,
     chunk_count: d._count.chunks,
+    embedding_model: d.chunks[0]?.embeddingModel ?? null,
   }));
   return { items, total: items.length };
 }
@@ -146,6 +155,7 @@ export async function getDocument(docId: string): Promise<DocumentDetailDto> {
     trust_level: d.trustLevel,
     quarantined: d.quarantined,
     chunk_count: d.chunks.length,
+    embedding_model: d.chunks[0]?.embeddingModel ?? null,
     source_path: d.sourcePath,
     checksum: d.checksum,
     updated_at: d.updatedAt.toISOString(),

@@ -31,9 +31,9 @@ router.post(
 router.get(
   '/documents/search',
   asyncHandler(async (req, res) => {
-    const { q, category, limit } = searchQuerySchema.parse(req.query);
-    const { results } = await searchKnowledge({ query: q, categoryHint: category, limit });
-    res.json({ query: q, results });
+    const { q, category, limit, mode } = searchQuerySchema.parse(req.query);
+    const { results, mode: usedMode } = await searchKnowledge({ query: q, categoryHint: category, limit, mode });
+    res.json({ query: q, mode: usedMode, results });
   }),
 );
 

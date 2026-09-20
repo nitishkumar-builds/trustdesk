@@ -50,6 +50,8 @@ export interface TriageOptions {
   provider?: AiProviderName;
   /** A ready adapter (the eval runner wraps the real one to observe prompt payloads); wins over provider. */
   adapter?: AiAdapter;
+  /** Retrieval mode override (default env.RETRIEVAL_MODE); the eval runner compares fts vs hybrid. */
+  retrievalMode?: 'fts' | 'hybrid';
 }
 
 export async function triageTicket(
@@ -66,9 +68,10 @@ export async function triageTicket(
   const policyContext = buildPolicyContext(ticket); // asOf = ticket.createdAt (rule R1)
 
   // 2. Retrieve grounding chunks. No categoryHint yet: the category is what we are deciding.
-  const { results: retrieved } = await searchKnowledge({
+  const { results: retrieved, mode: retrievalMode } = await searchKnowledge({
     query: `${ticket.subject} ${ticket.body}`,
     limit: RETRIEVAL_LIMIT,
+    mode: options.retrievalMode,
   });
   const retrievedDocIds = [...new Set(retrieved.map((r) => r.doc_id))];
 
@@ -118,6 +121,7 @@ export async function triageTicket(
     notes,
     model_output: modelJson,
     final_output: result,
+    retrieval_mode: retrievalMode,
   };
   await prisma.$transaction([
     prisma.agentRun.create({

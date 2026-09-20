@@ -34,6 +34,8 @@ export interface DraftOptions {
   provider?: AiProviderName;
   /** A ready adapter (the eval runner wraps the real one to observe prompt payloads); wins over provider. */
   adapter?: AiAdapter;
+  /** Retrieval mode override (default env.RETRIEVAL_MODE); the eval runner compares fts vs hybrid. */
+  retrievalMode?: 'fts' | 'hybrid';
 }
 
 type TicketWithContext = Ticket & { customer: Customer; order: Order | null };
@@ -61,10 +63,11 @@ export async function generateDraft(ticketId: string, principal: Principal, opti
   const inputScan = scanUntrustedInput(customerText, 'customer_message');
 
   // 4. Retrieve with the triage category as the prior.
-  const { results: retrieved } = await searchKnowledge({
+  const { results: retrieved, mode: retrievalMode } = await searchKnowledge({
     query: `${ticket.subject} ${ticket.body}`,
     categoryHint: triage.result.category,
     limit: RETRIEVAL_LIMIT,
+    mode: options.retrievalMode,
   });
   const retrievedDocIds = unique(retrieved.map((r) => r.doc_id));
 
@@ -196,6 +199,7 @@ export async function generateDraft(ticketId: string, principal: Principal, opti
     notes,
     triage_run_id: triage.result.runId,
     model_output: modelOutput,
+    retrieval_mode: retrievalMode,
   };
 
   await prisma.$transaction([
@@ -394,7 +398,7 @@ async function loadTicket(ticketId: string): Promise<TicketWithContext> {
 async function ensureTriage(ticket: TicketWithContext, principal: Principal, options: DraftOptions = {}): Promise<TriageFacts> {
   let result = await prisma.triageResult.findFirst({ where: { ticketId: ticket.ticketId }, orderBy: { createdAt: 'desc' } });
   if (!result) {
-    await triageTicket(ticket.ticketId, principal, { provider: options.provider, adapter: options.adapter });
+    await triageTicket(ticket.ticketId, principal, { provider: options.provider, adapter: options.adapter, retrievalMode: options.retrievalMode });
     result = await prisma.triageResult.findFirstOrThrow({ where: { ticketId: ticket.ticketId }, orderBy: { createdAt: 'desc' } });
   }
   const json: TriageJson = {
