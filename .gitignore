@@ -1,6 +1,36 @@
+# --- capstone pack utilities (SQLite output of scripts/seed_trustdesk.py) ---
 trustdesk_seed.db
 *.sqlite
 *.sqlite3
 __pycache__/
-.DS_Store
 
+# --- build prompts, demo script and local agent files (not part of the deliverable) ---
+TRUSTDESK_CLAUDE_CODE_PROMPTS.md
+docs_project/DEMO_SCRIPT.md
+.scratch/
+.playwright-mcp/
+.claude/
+
+# --- dependencies and build output ---
+node_modules/
+dist/
+coverage/
+*.tsbuildinfo
+
+# --- local environment (holds API keys and secrets) ---
+.env
+.env.local
+server/.env
+web/.env
+
+# --- eval run artefacts (reports/EVALUATION_REPORT.md is committed, per-run JSON is not) ---
+reports/*.json
+
+# --- logs and OS/editor noise ---
+*.log
+npm-debug.log*
+.DS_Store
+Thumbs.db
+.vscode/*
+!.vscode/extensions.json
+.idea/

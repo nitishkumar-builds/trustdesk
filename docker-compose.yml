@@ -1,0 +1,20 @@
+services:
+  db:
+    image: postgres:16
+    container_name: trustdesk-db
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_USER: trustdesk
+      POSTGRES_PASSWORD: trustdesk
+      POSTGRES_DB: trustdesk
+    volumes:
+      - trustdesk_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U trustdesk -d trustdesk"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  trustdesk_pgdata:

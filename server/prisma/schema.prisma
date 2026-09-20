@@ -1,0 +1,300 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ---------------------------------------------------------------------------
+// Pack entities (natural string IDs from data/ are the primary keys)
+// ---------------------------------------------------------------------------
+
+model Customer {
+  customerId String   @id @map("customer_id")
+  name       String
+  email      String
+  tier       String
+  country    String
+  createdAt  DateTime @map("created_at") @db.Timestamptz(3)
+  verified   Boolean
+  tags       String[]
+
+  orders  Order[]
+  tickets Ticket[]
+
+  @@map("customer")
+}
+
+model Order {
+  orderId             String    @id @map("order_id")
+  customerId          String    @map("customer_id")
+  status              String
+  placedAt            DateTime  @map("placed_at") @db.Timestamptz(3)
+  deliveredAt         DateTime? @map("delivered_at") @db.Timestamptz(3)
+  eligibleReturnUntil DateTime? @map("eligible_return_until") @db.Timestamptz(3)
+  total               Int
+  currency            String
+  paymentStatus       String    @map("payment_status")
+  trackingNumber      String    @map("tracking_number")
+  items               Json
+
+  customer Customer @relation(fields: [customerId], references: [customerId])
+  tickets  Ticket[]
+
+  @@index([customerId])
+  @@map("order")
+}
+
+model Ticket {
+  ticketId   String   @id @map("ticket_id")
+  customerId String   @map("customer_id")
+  orderId    String?  @map("order_id")
+  channel    String
+  subject    String
+  body       String
+  createdAt  DateTime @map("created_at") @db.Timestamptz(3)
+  status     String
+
+  customer           Customer            @relation(fields: [customerId], references: [customerId])
+  order              Order?              @relation(fields: [orderId], references: [orderId])
+  expectation        TicketExpectation?
+  triageResults      TriageResult[]
+  drafts             DraftReply[]
+  toolActionRequests ToolActionRequest[]
+  agentRuns          AgentRun[]
+
+  @@index([customerId])
+  @@index([orderId])
+  @@map("ticket")
+}
+
+// Rule R2: evaluation-only labels live here, never on Ticket. Only seed/ and
+// modules/evals/ (and tests) may read this table.
+model TicketExpectation {
+  ticketId           String   @id @map("ticket_id")
+  expectedCategory   String   @map("expected_category")
+  expectedPriority   String   @map("expected_priority")
+  expectedSentiment  String   @map("expected_sentiment")
+  expectedEscalation Boolean  @map("expected_escalation")
+  expectedActions    String[] @map("expected_actions")
+
+  ticket Ticket @relation(fields: [ticketId], references: [ticketId])
+
+  @@map("ticket_expectation")
+}
+
+// ---------------------------------------------------------------------------
+// Knowledge base
+// ---------------------------------------------------------------------------
+
+model KnowledgeDocument {
+  docId       String   @id @map("doc_id")
+  title       String
+  content     String
+  sourcePath  String   @map("source_path")
+  version     String
+  audience    String
+  trustLevel  String   @map("trust_level")
+  quarantined Boolean  @default(false)
+  checksum    String
+  updatedAt   DateTime @map("updated_at") @db.Timestamptz(3)
+
+  chunks KnowledgeChunk[]
+
+  @@map("knowledge_document")
+}
+
+model KnowledgeChunk {
+  id           String                   @id @default(cuid())
+  docId        String                   @map("doc_id")
+  ordinal      Int
+  heading      String?
+  content      String
+  // STORED generated column created by the add_fts migration; Postgres maintains it.
+  // The dbgenerated() expression and the two GIN indexes mirror that migration exactly so
+  // `prisma migrate dev` sees no drift (Prisma cannot express GENERATED ALWAYS itself).
+  searchVector Unsupported("tsvector")? @default(dbgenerated("to_tsvector('english'::regconfig, ((COALESCE(heading, ''::text) || ' '::text) || content))")) @map("search_vector")
+  // Phase 11 item 3: hashing-based or OpenRouter embedding of heading + content (empty when never computed).
+  embedding      Float[]  @default([])
+  embeddingModel String?  @map("embedding_model")
+
+  document KnowledgeDocument @relation(fields: [docId], references: [docId], onDelete: Cascade)
+
+  @@index([docId])
+  @@index([searchVector], map: "knowledge_chunk_search_vector_idx", type: Gin)
+  @@index([content(ops: raw("gin_trgm_ops"))], map: "knowledge_chunk_content_trgm_idx", type: Gin)
+  @@map("knowledge_chunk")
+}
+
+// ---------------------------------------------------------------------------
+// AI outputs
+// ---------------------------------------------------------------------------
+
+model TriageResult {
+  id             String   @id @default(cuid())
+  ticketId       String   @map("ticket_id")
+  category       String
+  priority       String
+  sentiment      String
+  shouldEscalate Boolean  @map("should_escalate")
+  reasonSummary  String   @map("reason_summary")
+  runId          String   @map("run_id")
+  createdAt      DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  ticket Ticket @relation(fields: [ticketId], references: [ticketId])
+
+  @@index([ticketId])
+  @@map("triage_result")
+}
+
+model DraftReply {
+  draftId            String   @id @map("draft_id")
+  ticketId           String   @map("ticket_id")
+  status             String
+  body               String
+  citations          String[]
+  recommendedActions Json     @map("recommended_actions")
+  refusalReason      String?  @map("refusal_reason")
+  runId              String   @map("run_id")
+  createdAt          DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  ticket    Ticket     @relation(fields: [ticketId], references: [ticketId])
+  approvals Approval[]
+
+  @@index([ticketId])
+  @@map("draft_reply")
+}
+
+// ---------------------------------------------------------------------------
+// Tool actions and approvals
+// ---------------------------------------------------------------------------
+
+model ToolDefinition {
+  toolName              String   @id @map("tool_name")
+  description           String
+  riskLevel             String   @map("risk_level")
+  requiresHumanApproval Boolean  @map("requires_human_approval")
+  allowedCategories     String[] @map("allowed_categories")
+  requiredFields        String[] @map("required_fields")
+  maxAmountInr          Int?     @map("max_amount_inr")
+
+  actionRequests ToolActionRequest[]
+
+  @@map("tool_definition")
+}
+
+model ToolActionRequest {
+  actionId              String    @id @map("action_id")
+  ticketId              String    @map("ticket_id")
+  toolName              String    @map("tool_name")
+  payload               Json
+  riskLevel             String    @map("risk_level")
+  requiresHumanApproval Boolean   @map("requires_human_approval")
+  status                String
+  idempotencyKey        String    @map("idempotency_key")
+  requestedBy           String    @map("requested_by")
+  result                Json?
+  createdAt             DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+  executedAt            DateTime? @map("executed_at") @db.Timestamptz(3)
+
+  ticket    Ticket         @relation(fields: [ticketId], references: [ticketId])
+  tool      ToolDefinition @relation(fields: [toolName], references: [toolName])
+  approvals Approval[]
+
+  // Rule R6: a replay of (tool, idempotency key) can never create a second row.
+  @@unique([toolName, idempotencyKey])
+  @@index([ticketId])
+  @@map("tool_action_request")
+}
+
+model Approval {
+  approvalId String   @id @map("approval_id")
+  actionId   String?  @map("action_id")
+  draftId    String?  @map("draft_id")
+  reviewerId String   @map("reviewer_id")
+  decision   String
+  reason     String
+  createdAt  DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  action ToolActionRequest? @relation(fields: [actionId], references: [actionId])
+  draft  DraftReply?        @relation(fields: [draftId], references: [draftId])
+
+  @@index([actionId])
+  @@index([draftId])
+  @@map("approval")
+}
+
+// ---------------------------------------------------------------------------
+// Traces, evals, feedback
+// ---------------------------------------------------------------------------
+
+model AgentRun {
+  runId            String   @id @map("run_id")
+  ticketId         String?  @map("ticket_id")
+  runType          String   @map("run_type")
+  status           String
+  retrievedDocIds  String[] @map("retrieved_doc_ids")
+  toolCalls        Json     @map("tool_calls")
+  guardrailResults Json     @map("guardrail_results")
+  modelProvider    String?  @map("model_provider")
+  modelName        String?  @map("model_name")
+  promptVersion    String?  @map("prompt_version")
+  latencyMs        Int?     @map("latency_ms")
+  tokenUsage       Json?    @map("token_usage")
+  costEstimate     Float?   @map("cost_estimate")
+  createdAt        DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  ticket Ticket? @relation(fields: [ticketId], references: [ticketId])
+
+  @@index([ticketId])
+  @@map("agent_run")
+}
+
+// Rule R2: evaluation-only. Read by modules/evals/ only.
+model EvalCase {
+  caseId   String @id @map("case_id")
+  ticketId String @map("ticket_id")
+  input    String
+  expected Json
+
+  @@map("eval_case")
+}
+
+model EvalRun {
+  evalRunId   String    @id @map("eval_run_id")
+  startedAt   DateTime  @map("started_at") @db.Timestamptz(3)
+  completedAt DateTime? @map("completed_at") @db.Timestamptz(3)
+  totalCases  Int       @map("total_cases")
+  provider    String
+  metrics     Json
+  caseResults Json      @map("case_results")
+
+  @@map("eval_run")
+}
+
+model Feedback {
+  feedbackId        String   @id @map("feedback_id")
+  ticketId          String   @map("ticket_id")
+  draftId           String?  @map("draft_id")
+  rating            Int
+  reason            String?
+  correctedResponse String?  @map("corrected_response")
+  createdAt         DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  @@index([ticketId])
+  @@map("feedback")
+}
+
+// Phase 11 item 4: login users (support_agent | support_manager | admin); password hashes are scrypt.
+model User {
+  userId       String   @id @map("user_id")
+  email        String   @unique
+  name         String
+  role         String
+  passwordHash String   @map("password_hash")
+  createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  @@map("user")
+}
