@@ -1,0 +1,14 @@
+{
+  "name": "trustdesk",
+  "private": true,
+  "version": "0.1.0",
+  "description": "TrustDesk capstone — one-command runner for the API (server/) and the frontend (web/)",
+  "scripts": {
+    "dev": "concurrently -k -n server,web -c blue,green \"npm run dev --prefix server\" \"npm run dev --prefix web\"",
+    "seed": "npm run db:seed --prefix server",
+    "eval": "npm run eval --prefix server"
+  },
+  "devDependencies": {
+    "concurrently": "^9.2.1"
+  }
+}

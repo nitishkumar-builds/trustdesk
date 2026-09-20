@@ -4,3 +4,19 @@ trustdesk_seed.db
 __pycache__/
 .DS_Store
 
+# local agent issue tracker
+.scratch/
+.TRUSTDESK_CLAUDE_CODE_PROMPTS.md
+# local agent issue tracker
+# dependencies and build output
+node_modules/
+dist/
+coverage/
+
+# local environment (holds API keys)
+.env
+server/.env
+web/.env
+
+# eval run artefacts (the markdown report is committed, per-run JSON is not)
+reports/*.json
