@@ -44,6 +44,8 @@ A request enters through Express, where a bearer token — a static demo token o
 
 Prerequisites: Node.js 20.19+ or 22.12+ (Vite 8 refuses older 20.x/22.x; built and tested on Node 24), npm 10+, Docker Desktop (for PostgreSQL 16), and a POSIX shell or Git Bash on Windows (for `cp`).
 
+One database per machine: `docker-compose.yml` names the container `trustdesk-db` and binds host port 5432, so a second checkout (or an older one still running) makes `docker compose up -d` fail with *"container name … is already in use"*. Run `docker compose down` in the other checkout first (its data stays in that checkout's named volume), or reuse the running container and skip step 1 — but note that `npm run test:ci` truncates whatever database `DATABASE_URL` points at.
+
 ```bash
 # 1. database
 docker compose up -d                      # PostgreSQL 16 in the container trustdesk-db, port 5432
