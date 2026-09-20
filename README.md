@@ -137,6 +137,8 @@ All routes below are mounted under `http://localhost:4000` and, except `GET /hea
 | GET | `/api/eval-runs` | any | Past eval runs, newest first |
 | GET | `/api/eval-runs/:evalRunId` | any | Status, metrics, per-case results and adversarial summary of one run |
 | GET | `/api/metrics/summary` | any | Observability: runs per type/status, p50/p95 latency, tokens and estimated cost (`since`, `ticket_id`) |
+| POST | `/api/red-team/probe` | any | Run the input scanner, post-rules and guardrail decision on pasted text; nothing is stored |
+| GET | `/api/red-team/runs` | any | Agent runs whose input scan flagged the customer text: pattern groups, terms, outcome (`limit`) |
 | POST | `/api/feedback` | any | Reviewer feedback on a ticket or draft: `rating` 1–5, optional `reason` and `corrected_response` (201) |
 | GET | `/api/feedback` | any | Feedback newest first with the average rating (`ticket_id`, `draft_id`, `limit`) |
 
@@ -164,6 +166,7 @@ The full append-only log is the "Decisions" section of `CLAUDE.md` (D-000 onward
 Good-To-Have decisions (Phase 11):
 
 - **Feedback (item 2).** `POST /api/feedback` stores a 1–5 rating with an optional reason and corrected response against a ticket and, optionally, one of its drafts (the draft must belong to the ticket); `GET /api/feedback?ticket_id=` lists newest first with the average. In the ticket page, thumbs up/down under the draft map to ratings 5 and 1, the comment box is the reason, and an unsaved edit of the draft text is submitted as the corrected response. Feedback is stored for later analysis only; nothing reads it back into a prompt.
+- **Red-team view (item 5).** `/red-team` lists every `agent_run` whose stored `input_scan.flagged` is true (a JSON-path filter on `guardrail_results`) with the matched pattern groups and terms, the ticket, the severity and the guardrail outcome, and offers a probe: `POST /api/red-team/probe { text }` runs the input scanner, the triage post-rules (against a neutral model answer) and the decision table over any pasted text and returns the decision, the refusal template it would use and whether a model would have been called — without a ticket, a prompt or a database write, so a reviewer can paste their own injection and watch it get caught (or not: a paraphrase that matches no pattern is reported as `allow`, which is the documented limitation made visible).
 - **Full RBAC (item 4).** A `user` table (scrypt password hashes via Node's crypto, no extra dependency) and `POST /api/auth/login` issuing a signed JWT (`jsonwebtoken`, HS256, `JWT_SECRET`, issuer `trustdesk`, `JWT_TTL_SECONDS`). `requireAuth` accepts either a login JWT or one of the three static demo tokens, so every README command and test keeps working; the seeded users are the same identities the demo tokens resolve to. Per-route role policies were moved out of the routers into one map, `ROUTE_POLICIES` in `middleware/policy.ts`, enforced by `enforcePolicy` right after `requireAuth` (unlisted routes are open to any authenticated role; the four listed ones name their roles). Role changes take effect when a token expires — the JWT is trusted without a per-request user lookup.
 - **Hybrid retrieval (item 3).** `RETRIEVAL_MODE=hybrid` adds a vector side to retrieval: each chunk gets an embedding at ingest (`EMBEDDING_PROVIDER=local`, the default, is a deterministic hashing embedding — 256 hashed unigram/bigram buckets, not a neural model; `openrouter` calls the OpenRouter embeddings endpoint with `OPENROUTER_EMBEDDING_MODEL` and fails loudly rather than falling back, so `knowledge_chunk.embedding_model` always names what is active), stored as a plain `double precision[]` column (no pgvector). At query time the FTS ranking and the cosine ranking are fused with reciprocal rank fusion (k = 60) and the category prior is applied on top. The default stays `fts`, so the committed eval baseline does not move; `npm run eval -- --compare-retrieval` measures both modes on the same cases and writes the comparison table into `reports/EVALUATION_REPORT.md` (on the local embedding both modes score 1.000 everywhere, which says more about the eight cases and the category prior than about the embedding).
 - **Observability (item 1).** Every model call already recorded `model_name`, `prompt_version`, `latency_ms` and `token_usage`; the adapter factory now attaches `cost_estimate` from a small price table (`server/src/ai/pricing.ts`, USD per million tokens, approximate list prices, overridable with `AI_PRICE_TABLE_JSON`; unknown models are reported as *unpriced* rather than guessed). `GET /api/metrics/summary` aggregates `agent_run` — runs per type and status, nearest-rank p50/p95/max latency overall and per type, prompt/completion tokens per model, estimated cost — with optional `since` and `ticket_id` windows, and the `/metrics` page renders it.
@@ -227,14 +230,14 @@ trustdesk/
 │   │   ├── ai/                   adapter types, mockAdapter, openRouterAdapter, pricing.ts (cost table), prompts/triage.v1, draftReply.v1
 │   │   ├── guardrails/           patterns, inputScanner, documentTrust, policy (decision table), refusalTemplates, outputScanner, selfTest
 │   │   ├── seed/seed.ts          idempotent loader for data/ (--reset truncates first)
-│   │   └── modules/              auth (login, JWT, passwords), tickets, customers, orders, knowledge (+ embeddings.ts, localEmbedding.ts), triage, drafts, toolActions (+ executors/), traces, evals, metrics, feedback
+│   │   └── modules/              auth (login, JWT, passwords), tickets, customers, orders, knowledge (+ embeddings.ts, localEmbedding.ts), triage, drafts, toolActions (+ executors/), traces, evals, metrics, feedback, redTeam
 │   └── tests/                    Vitest + Supertest: unit, API, contract, auth enumeration, integration/demoFlow
 └── web/                          React 18 + Vite + TypeScript, plain CSS
     ├── vite.config.ts            proxies /api and /health to :4000
     └── src/
         ├── lib/                  api.ts (typed fetch, error envelope), session.tsx (token + role), types.ts
         ├── components/           ErrorBanner, ui (badges, spinner, drawer, useAction), DocumentDrawer
-        ├── pages/                TicketQueue, TicketDetail, EvalsPage, DocumentsPage, MetricsPage
+        ├── pages/                TicketQueue, TicketDetail, EvalsPage, DocumentsPage, MetricsPage, RedTeamPage
         └── styles.css            all styling
 ```
 

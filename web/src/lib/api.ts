@@ -11,8 +11,10 @@ import type {
   EvalRun,
   EvalRunSummary,
   Feedback,
+  FlaggedRun,
   MetricsSummary,
   Page,
+  ProbeResult,
   TicketDetail,
   TicketListItem,
   ToolActionDetail,
@@ -135,6 +137,10 @@ export const api = {
   listEvalRuns: () => get<{ items: EvalRunSummary[]; total: number }>('/eval-runs?limit=20'),
 
   metricsSummary: () => get<MetricsSummary>('/metrics/summary'),
+
+  // Phase 11 item 5: red-team view
+  probe: (text: string) => post<ProbeResult>('/red-team/probe', { text }),
+  listFlaggedRuns: () => get<{ items: FlaggedRun[]; total: number }>('/red-team/runs?limit=100'),
 
   // Phase 11 item 4: JWT login (the demo-token buttons keep working as a fallback)
   login: (email: string, password: string) =>

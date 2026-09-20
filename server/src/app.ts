@@ -15,6 +15,7 @@ import { router as feedbackRouter } from './modules/feedback/router.js';
 import { router as knowledgeRouter } from './modules/knowledge/router.js';
 import { router as metricsRouter } from './modules/metrics/router.js';
 import { router as ordersRouter } from './modules/orders/router.js';
+import { router as redTeamRouter } from './modules/redTeam/router.js';
 import { router as ticketsRouter } from './modules/tickets/router.js';
 import { router as toolActionsRouter } from './modules/toolActions/router.js';
 import { router as tracesRouter } from './modules/traces/router.js';
@@ -61,6 +62,7 @@ export function createApp(): Express {
   api.use(evalsRouter);
   api.use(metricsRouter);
   api.use(feedbackRouter);
+  api.use(redTeamRouter);
   app.use('/api', api);
 
   app.use((req, _res, next) => {

@@ -306,6 +306,29 @@ export interface Feedback {
   created_at: string
 }
 
+export interface ProbeResult {
+  input_scan: { source: string; flagged: boolean; categories: string[]; matches: Array<{ group: string; term: string }>; severity: string }
+  fired_rules: FiredRule[]
+  decision: { outcome: string; reasons: string[]; required_citations: string[]; refusal_template: string | null }
+  refusal_preview: string | null
+  would_call_model: boolean
+  persisted: false
+}
+
+export interface FlaggedRun {
+  run_id: string
+  ticket_id: string | null
+  run_type: string
+  status: string
+  created_at: string
+  severity: string
+  pattern_groups: string[]
+  matched_terms: Array<{ group: string; term: string }>
+  outcome: string | null
+  refusal_template: string | null
+  model_provider: string | null
+}
+
 export interface LatencyStats {
   count: number
   p50_ms: number | null
