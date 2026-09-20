@@ -128,12 +128,16 @@ describe('openrouter adapter (stubbed fetch)', () => {
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
-  it('reports non-JSON output with the raw text in details', async () => {
-    const fetchMock = vi.fn(async () => jsonResponse(completion('Sure! Here is my answer: refund')));
-    const adapter = new OpenRouterAdapter(fetchMock as unknown as typeof fetch, async () => undefined);
-    const err = await adapter.complete({ promptVersion: 'p', system: 's', user: 'u', jsonSchema: {} }).catch((e) => e);
-    expect(err.code).toBe('AI_PROVIDER_ERROR');
-    expect(err.details.raw_text).toContain('Sure!');
+  it('hands non-JSON output back with json undefined (the caller retries, then falls back) and extracts JSON wrapped in prose', async () => {
+    const prose = vi.fn(async () => jsonResponse(completion('Sure! Here is my answer: refund')));
+    const adapter = new OpenRouterAdapter(prose as unknown as typeof fetch, async () => undefined);
+    const res = await adapter.complete({ promptVersion: 'p', system: 's', user: 'u', jsonSchema: {} });
+    expect(res.json).toBeUndefined();
+    expect(res.text).toContain('Sure!');
+    expect(prose).toHaveBeenCalledTimes(1); // not retried at the adapter level
+    const wrapped = vi.fn(async () => jsonResponse(completion('Here you go:\n{"category": "refund", "priority": "low"}\nLet me know if you need more.')));
+    const res2 = await new OpenRouterAdapter(wrapped as unknown as typeof fetch, async () => undefined).complete({ promptVersion: 'p', system: 's', user: 'u', jsonSchema: {} });
+    expect(res2.json).toEqual({ category: 'refund', priority: 'low' });
   });
 
   it('stripCodeFences handles fenced, language-tagged and plain text', () => {

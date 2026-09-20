@@ -88,14 +88,11 @@ export class OpenRouterAdapter implements AiAdapter {
             ? { prompt: data.usage.prompt_tokens, completion: data.usage.completion_tokens ?? 0 }
             : undefined;
 
+        // Non-JSON output is NOT a provider error: it is handed back with json undefined so the
+        // caller's validation treats it like a schema-invalid answer (corrective retry, then the
+        // deterministic fallback, D-033/D-075). Prose around a JSON object is tolerated.
         let json: unknown;
-        if (req.jsonSchema) {
-          try {
-            json = JSON.parse(stripCodeFences(text));
-          } catch {
-            throw aiProviderError('OpenRouter returned non-JSON output', { raw_text: text });
-          }
-        }
+        if (req.jsonSchema) json = parseJsonLenient(text);
 
         return {
           text,
@@ -151,6 +148,25 @@ export function stripCodeFences(text: string): string {
   const trimmed = text.trim();
   const fenced = /^```(?:json)?\s*([\s\S]*?)\s*```$/i.exec(trimmed);
   return fenced ? fenced[1]!.trim() : trimmed;
+}
+
+/** JSON.parse after fence stripping; falls back to the first {...} block in the text; undefined when nothing parses. */
+export function parseJsonLenient(text: string): unknown {
+  const stripped = stripCodeFences(text);
+  try {
+    return JSON.parse(stripped);
+  } catch {
+    const start = stripped.indexOf('{');
+    const end = stripped.lastIndexOf('}');
+    if (start >= 0 && end > start) {
+      try {
+        return JSON.parse(stripped.slice(start, end + 1));
+      } catch {
+        return undefined;
+      }
+    }
+    return undefined;
+  }
 }
 
 function isAbort(err: unknown): boolean {
