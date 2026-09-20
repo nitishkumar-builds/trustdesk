@@ -25,14 +25,16 @@ interface CompiledPolicy {
   roles: readonly Role[];
 }
 
-// ":param" segments match one path segment; a trailing slash is tolerated.
+// ":param" segments match one path segment; a trailing slash is tolerated. The match is
+// case-insensitive because Express routing is case-insensitive by default (Router() instances do not
+// inherit app-level settings), so /api/EVAL-RUNS reaches the same handler and must meet the same policy.
 function compile(pattern: RoutePattern, roles: readonly Role[]): CompiledPolicy {
   const [method, path] = pattern.split(' ') as [string, string];
   const source = path
     .split('/')
     .map((seg) => (seg.startsWith(':') ? '[^/]+' : seg.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')))
     .join('/');
-  return { key: pattern, method, regex: new RegExp(`^${source}/?$`), roles };
+  return { key: pattern, method, regex: new RegExp(`^${source}/?$`, 'i'), roles };
 }
 
 const COMPILED: CompiledPolicy[] = (Object.entries(ROUTE_POLICIES) as Array<[RoutePattern, readonly Role[]]>).map(([k, v]) => compile(k, v));

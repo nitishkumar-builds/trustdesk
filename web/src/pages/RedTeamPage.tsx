@@ -13,6 +13,7 @@ export default function RedTeamPage() {
   const { report } = useErrors()
   const { busy, run } = useAction()
   const [runs, setRuns] = useState<FlaggedRun[] | 'failed' | null>(null)
+  const [total, setTotal] = useState(0)
   const [text, setText] = useState(SAMPLE)
   const [probe, setProbe] = useState<ProbeResult | null>(null)
 
@@ -21,7 +22,9 @@ export default function RedTeamPage() {
     api
       .listFlaggedRuns()
       .then((r) => {
-        if (!cancelled) setRuns(r.items)
+        if (cancelled) return
+        setRuns(r.items)
+        setTotal(r.total)
       })
       .catch((err) => {
         if (cancelled) return
@@ -35,6 +38,13 @@ export default function RedTeamPage() {
   useEffect(() => load(), [load])
 
   const doProbe = () => run('probe', async () => setProbe(await api.probe(text)), 'POST /api/red-team/probe')
+  const loadMore = () =>
+    run('more', async () => {
+      const have = Array.isArray(runs) ? runs : []
+      const r = await api.listFlaggedRuns(have.length)
+      setRuns([...have, ...r.items.filter((x) => !have.some((h) => h.run_id === x.run_id))])
+      setTotal(r.total)
+    }, 'GET /api/red-team/runs')
 
   return (
     <section className="stack">
@@ -101,7 +111,7 @@ export default function RedTeamPage() {
       <div className="card">
         <div className="row row-between">
           <h3>Flagged runs</h3>
-          {runs === null ? <Spinner label="loading" /> : runs === 'failed' ? <span className="text-danger small">could not load (see the error banner)</span> : <span className="muted small">{runs.length} newest runs with a flagged input scan</span>}
+          {runs === null ? <Spinner label="loading" /> : runs === 'failed' ? <span className="text-danger small">could not load (see the error banner)</span> : <span className="row"><span className="muted small">{runs.length} of {total} runs with a flagged input scan</span>{runs.length < total ? <ActionButton name="more" busy={busy} onClick={loadMore}>Load more</ActionButton> : null}</span>}
         </div>
         <table className="table">
           <thead>

@@ -140,7 +140,7 @@ export const api = {
 
   // Phase 11 item 5: red-team view
   probe: (text: string) => post<ProbeResult>('/red-team/probe', { text }),
-  listFlaggedRuns: () => get<{ items: FlaggedRun[]; total: number }>('/red-team/runs?limit=100'),
+  listFlaggedRuns: (offset = 0) => get<{ items: FlaggedRun[]; total: number; limit: number; offset: number }>(`/red-team/runs?limit=100&offset=${offset}`),
 
   // Phase 11 item 4: JWT login (the demo-token buttons keep working as a fallback)
   login: (email: string, password: string) =>

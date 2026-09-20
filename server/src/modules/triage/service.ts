@@ -1,6 +1,6 @@
 import type { Prisma } from '@prisma/client';
 import { z } from 'zod';
-import { getAiAdapter, type AiAdapter, type AiProviderName, type AiResponse } from '../../ai/index.js';
+import { getAiAdapter, mergeResponses, type AiAdapter, type AiProviderName, type AiResponse } from '../../ai/index.js';
 import { mockTriage, type TriageJson } from '../../ai/mockAdapter.js';
 import * as triagePrompt from '../../ai/prompts/triage.v1.js';
 import { newId } from '../../db/ids.js';
@@ -134,7 +134,7 @@ export async function triageTicket(
         toolCalls: [],
         guardrailResults: guardrailResults as unknown as Prisma.InputJsonObject,
         modelProvider: response?.modelProvider ?? adapter.name,
-        modelName: response?.modelName ?? null,
+        modelName: response?.modelName || null,
         promptVersion: triagePrompt.version,
         latencyMs: response?.latencyMs ?? Date.now() - started,
         tokenUsage: response?.tokenUsage ? (response.tokenUsage as Prisma.InputJsonObject) : undefined,
@@ -175,7 +175,9 @@ async function completeWithValidation(
   notes: string[],
   ticket: { subject: string; body: string },
 ): Promise<{ json: TriageJson; response: AiResponse | null }> {
-  const attempt = async (extraSystem: string): Promise<{ json: TriageJson; response: AiResponse } | null> => {
+  // Every attempt's response is kept so the trace reports the tokens and cost of the whole call (D-074).
+  const responses: AiResponse[] = [];
+  const attempt = async (extraSystem: string): Promise<TriageJson | null> => {
     const response = await adapter.complete({
       promptVersion: triagePrompt.version,
       system: extraSystem ? `${triagePrompt.system}\n\n${extraSystem}` : triagePrompt.system,
@@ -183,24 +185,28 @@ async function completeWithValidation(
       jsonSchema: TRIAGE_JSON_SCHEMA,
       temperature: 0.1,
     });
+    responses.push(response);
     const parsed = triageOutputSchema.safeParse(response.json);
-    if (parsed.success) return { json: parsed.data, response };
+    if (parsed.success) return parsed.data;
     notes.push(`model_output_invalid: ${parsed.error.issues.map((i) => `${i.path.join('.')}: ${i.message}`).join('; ')}`);
     return null;
   };
 
   const first = await attempt('');
-  if (first) return first;
+  if (first) return { json: first, response: mergeResponses(responses) };
 
   const second = await attempt(
     'Your previous answer was not valid JSON with the required keys and enum values. Answer again with ONLY the JSON object.',
   );
   if (second) {
     notes.push('model_output_retry_succeeded');
-    return second;
+    return { json: second, response: mergeResponses(responses) };
   }
 
+  // Fallback: the mock rules answer, but the paid attempts' usage still lands on the run
+  // (model_name stays null so the fallback remains visible, D-033).
   notes.push('model_output_invalid_fallback_applied');
   const fallback = mockTriage(`${ticket.subject}\n${ticket.body}`);
-  return { json: fallback.json, response: null };
+  const merged = mergeResponses(responses);
+  return { json: fallback.json, response: merged ? { ...merged, modelName: '' } : null };
 }

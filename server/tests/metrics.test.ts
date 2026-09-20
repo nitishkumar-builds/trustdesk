@@ -11,6 +11,7 @@ const AGENT = `Bearer ${process.env.DEMO_AGENT_TOKEN ?? 'agent-token-123'}`;
 
 describe('pricing table', () => {
   it('prices known models per million tokens, returns null for unknown models or missing usage, and honours AI_PRICE_TABLE_JSON', async () => {
+    delete process.env.AI_PRICE_TABLE_JSON; // the suite asserts the built-in table, whatever the local .env says
     const pricing = await import('../src/ai/pricing.js');
     const { percentile } = await import('../src/modules/metrics/service.js');
     pricing.resetPriceTableCache();
@@ -51,6 +52,7 @@ describeWithDb('GET /api/metrics/summary (AI_PROVIDER=mock)', () => {
 
   beforeAll(async () => {
     process.env.AI_PROVIDER = 'mock';
+    delete process.env.AI_PRICE_TABLE_JSON;
     ({ prisma } = await import('../src/db/prisma.js'));
     const { createApp } = await import('../src/app.js');
     app = createApp();
@@ -82,6 +84,38 @@ describeWithDb('GET /api/metrics/summary (AI_PROVIDER=mock)', () => {
       expect(run.body.token_usage).toMatchObject({ prompt: expect.any(Number), completion: expect.any(Number) });
       expect(run.body.cost_estimate).toBe(0); // the mock is free in the price table
     }
+  });
+
+  it('a schema-invalid first answer plus a valid retry reports the tokens and cost of BOTH attempts on the run', async () => {
+    const { triageTicket } = await import('../src/modules/triage/service.js');
+    const { mergeResponses } = await import('../src/ai/index.js');
+    let calls = 0;
+    const flaky = {
+      name: 'openrouter' as const,
+      async complete() {
+        calls += 1;
+        const bad = { text: '{}', json: { category: 'not-a-category' }, modelProvider: 'openrouter', modelName: 'google/gemini-2.5-flash', latencyMs: 40, tokenUsage: { prompt: 300, completion: 20 }, costEstimate: 0.0001 };
+        const good = { text: '{}', json: { category: 'refund', priority: 'medium', sentiment: 'neutral', should_escalate: false, reason_summary: 'ok' }, modelProvider: 'openrouter', modelName: 'google/gemini-2.5-flash', latencyMs: 60, tokenUsage: { prompt: 350, completion: 30 }, costEstimate: 0.0002 };
+        return calls === 1 ? bad : good;
+      },
+    };
+    const res = await triageTicket(TICKET, { userId: 'usr_agent', role: 'support_agent' }, { adapter: flaky });
+    runIds.push(res.run_id);
+    expect(calls).toBe(2);
+    const run = await prisma.agentRun.findUniqueOrThrow({ where: { runId: res.run_id } });
+    expect(run.tokenUsage).toEqual({ prompt: 650, completion: 50 });
+    expect(run.costEstimate).toBeCloseTo(0.0003, 6);
+    expect(run.latencyMs).toBe(100);
+    expect(run.modelName).toBe('google/gemini-2.5-flash');
+    expect((run.guardrailResults as { notes: string[] }).notes).toContain('model_output_retry_succeeded');
+    // merge helper edge cases
+    expect(mergeResponses([])).toBeNull();
+    expect(mergeResponses([{ text: '', modelProvider: 'mock', modelName: 'm', latencyMs: 5 }])).toMatchObject({ latencyMs: 5, tokenUsage: undefined, costEstimate: undefined });
+    // a malformed price table fails at boot instead of at the first model call
+    const { validatePriceTableJson } = await import('../src/config/env.js');
+    expect(() => validatePriceTableJson('{not json')).toThrow();
+    expect(() => validatePriceTableJson('{"m":{"input_per_million":-1,"output_per_million":0}}')).toThrow(/non-negative/);
+    expect(() => validatePriceTableJson('{"m":{"input_per_million":1,"output_per_million":2}}')).not.toThrow();
   });
 
   it('summarises runs per type and status, p50/p95 latency, tokens and cost over a window', async () => {

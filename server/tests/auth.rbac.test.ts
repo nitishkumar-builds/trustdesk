@@ -45,6 +45,7 @@ describe('password hashing and JWT verification (no DB)', () => {
     expect(policyFor('POST', '/api/tool-actions/act_123/execute')).toBeNull();
     expect(policyFor('POST', '/api/tool-actions/a/b/approve')).toBeNull();
     expect(policyFor('post', '/api/documents/ingest')?.key).toBe('POST /api/documents/ingest');
+    expect(policyFor('POST', '/api/EVAL-RUNS')?.roles).toEqual(['admin']); // Express routes case-insensitively by default
     expect(Object.keys(ROUTE_POLICIES)).toHaveLength(4);
   });
 });
@@ -133,5 +134,13 @@ describeWithDb('login, JWT bearer auth and the policy middleware', () => {
     expect(adminIngest.status).toBe(400); // passed the policy, empty body fails validation
     const agentOpen = await request(app).get('/api/eval-runs').set('Authorization', `Bearer ${agent.token}`);
     expect(agentOpen.status).toBe(200); // unlisted route: any role
+    // path variants cannot dodge the policy (it matches case-insensitively, before routing): case, trailing slash, double slash
+    for (const p of ['/api/EVAL-RUNS', '/api/eval-runs/', '/api//eval-runs', '/api/Eval-Runs/']) {
+      const r = await request(app).post(p).set('Authorization', `Bearer ${agent.token}`).send({});
+      expect(r.status, p).toBe(403);
+    }
+    // Express routes case-insensitively, so an allowed role reaches the handler through the odd-cased alias too (400 = validation)
+    const aliased = await request(app).post('/api/documents/INGEST').set('Authorization', `Bearer ${admin.token}`).send({});
+    expect(aliased.status).toBe(400);
   });
 });

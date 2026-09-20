@@ -14,6 +14,7 @@ describeWithDb('feedback API (AI_PROVIDER=mock)', () => {
   const draftIds: string[] = [];
   const runIds: string[] = [];
   let draftId = '';
+  const startedAt = new Date();
 
   beforeAll(async () => {
     process.env.AI_PROVIDER = 'mock';
@@ -25,7 +26,8 @@ describeWithDb('feedback API (AI_PROVIDER=mock)', () => {
     draftId = draft.body.draft_id;
     draftIds.push(draftId);
     runIds.push(draft.body.run_id);
-    const triage = await prisma.triageResult.findFirst({ where: { ticketId: 'tkt_9002' }, orderBy: { createdAt: 'desc' } });
+    // only a triage this suite caused (the draft triages first when none exists) is cleaned up
+    const triage = await prisma.triageResult.findFirst({ where: { ticketId: 'tkt_9002', createdAt: { gte: startedAt } }, orderBy: { createdAt: 'desc' } });
     if (triage) runIds.push(triage.runId);
   });
 

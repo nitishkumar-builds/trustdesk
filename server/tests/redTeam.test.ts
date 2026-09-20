@@ -49,6 +49,7 @@ describeWithDb('red-team API (AI_PROVIDER=mock)', () => {
   let prisma: (typeof import('../src/db/prisma.js'))['prisma'];
   const draftIds: string[] = [];
   const runIds: string[] = [];
+  const startedAt = new Date();
 
   beforeAll(async () => {
     process.env.AI_PROVIDER = 'mock';
@@ -92,12 +93,21 @@ describeWithDb('red-team API (AI_PROVIDER=mock)', () => {
     draftIds.push(clean.body.draft_id);
     runIds.push(clean.body.run_id);
     for (const t of ['tkt_9007', 'tkt_9002']) {
-      const triage = await prisma.triageResult.findFirst({ where: { ticketId: t }, orderBy: { createdAt: 'desc' } });
+      // only a triage this suite caused is cleaned up
+      const triage = await prisma.triageResult.findFirst({ where: { ticketId: t, createdAt: { gte: startedAt } }, orderBy: { createdAt: 'desc' } });
       if (triage && !runIds.includes(triage.runId)) runIds.push(triage.runId);
     }
 
     const res = await request(app).get('/api/red-team/runs').query({ limit: 200 }).set('Authorization', AGENT);
     expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ limit: 200, offset: 0 });
+    // offset pagination walks the same ordering without gaps or repeats
+    const page1 = await request(app).get('/api/red-team/runs').query({ limit: 1, offset: 0 }).set('Authorization', AGENT);
+    const page2 = await request(app).get('/api/red-team/runs').query({ limit: 1, offset: 1 }).set('Authorization', AGENT);
+    expect(page1.body.items[0].run_id).toBe(res.body.items[0].run_id);
+    if (res.body.items.length > 1) expect(page2.body.items[0].run_id).toBe(res.body.items[1].run_id);
+    const badOffset = await request(app).get('/api/red-team/runs').query({ offset: -1 }).set('Authorization', AGENT);
+    expect(badOffset.status).toBe(400);
     const ids = res.body.items.map((r: { run_id: string }) => r.run_id);
     expect(ids).toContain(flagged.body.run_id);
     expect(ids).not.toContain(clean.body.run_id);

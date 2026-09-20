@@ -1,5 +1,5 @@
 import type { AgentRun, Customer, Order, Prisma, Ticket, TriageResult } from '@prisma/client';
-import { getAiAdapter, type AiAdapter, type AiProviderName, type AiResponse } from '../../ai/index.js';
+import { getAiAdapter, mergeResponses, type AiAdapter, type AiProviderName, type AiResponse } from '../../ai/index.js';
 import { extractDraftFacts, mockDraft, type TriageJson } from '../../ai/mockAdapter.js';
 import * as draftPrompt from '../../ai/prompts/draftReply.v1.js';
 import { newId } from '../../db/ids.js';
@@ -213,7 +213,7 @@ export async function generateDraft(ticketId: string, principal: Principal, opti
         toolCalls: recommendations as unknown as Prisma.InputJsonArray,
         guardrailResults: guardrailResults as unknown as Prisma.InputJsonObject,
         modelProvider: response?.modelProvider ?? (guardrail.outcome === 'refuse_and_escalate' ? 'none' : adapter.name),
-        modelName: response?.modelName ?? null,
+        modelName: response?.modelName || null,
         promptVersion: draftPrompt.version,
         latencyMs: response?.latencyMs ?? Date.now() - started,
         tokenUsage: response?.tokenUsage ? (response.tokenUsage as Prisma.InputJsonObject) : undefined,
@@ -421,7 +421,9 @@ async function completeDraftWithValidation(
   notes: string[],
   customerText: string,
 ): Promise<{ json: DraftOutput; response: AiResponse | null }> {
-  const attempt = async (extraSystem: string) => {
+  // Every attempt's response is kept so the trace reports the tokens and cost of the whole call (D-074).
+  const responses: AiResponse[] = [];
+  const attempt = async (extraSystem: string): Promise<DraftOutput | null> => {
     const response = await adapter.complete({
       promptVersion: draftPrompt.version,
       system: extraSystem ? `${draftPrompt.system}\n\n${extraSystem}` : draftPrompt.system,
@@ -430,23 +432,25 @@ async function completeDraftWithValidation(
       temperature: 0.2,
       maxTokens: 1200,
     });
+    responses.push(response);
     const parsed = draftOutputSchema.safeParse(response.json);
-    if (parsed.success) return { json: parsed.data, response };
+    if (parsed.success) return parsed.data;
     notes.push(`model_output_invalid: ${parsed.error.issues.map((i) => `${i.path.join('.')}: ${i.message}`).join('; ')}`);
     return null;
   };
 
   const first = await attempt('');
-  if (first) return first;
+  if (first) return { json: first, response: mergeResponses(responses) };
   const second = await attempt(
     'Your previous answer was not valid JSON with the required keys. Answer again with ONLY the JSON object: body, citations, recommended_actions, confidence.',
   );
   if (second) {
     notes.push('model_output_retry_succeeded');
-    return second;
+    return { json: second, response: mergeResponses(responses) };
   }
   notes.push('model_output_invalid_fallback_applied');
-  return { json: mockDraft(customerText, extractDraftFacts(user)).json, response: null };
+  const merged = mergeResponses(responses);
+  return { json: mockDraft(customerText, extractDraftFacts(user)).json, response: merged ? { ...merged, modelName: '' } : null };
 }
 
 async function persistFailedRun(input: {

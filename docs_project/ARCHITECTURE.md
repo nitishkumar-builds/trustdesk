@@ -7,9 +7,10 @@ This is the fuller write-up behind the README's architecture section. Paths are 
 ```
  browser (web/, React 18 + Vite)             ┌──────────────────────────────────────────────────┐
    TicketQueue · TicketDetail · Evals · Docs  │ server/ (Express 4, TypeScript, ESM)              │
-        │  /api/* with Authorization: Bearer  │                                                   │
-        ▼                                    │  middleware: requestId → json → pino-http →       │
- vite dev proxy ──────────────────────────► │              requireAuth (/api) → requireRole     │
+   Metrics · Red team (Phase 11)              │                                                   │
+        │  /api/* with Authorization: Bearer  │  middleware: requestId → json → pino-http →       │
+        ▼                                    │              requireAuth (/api, demo token or JWT) │
+ vite dev proxy ──────────────────────────► │              → enforcePolicy (policy.ts route map) │
                                              │                                                   │
                                              │  modules/                                         │
                                              │   tickets · customers · orders  (context, R1)     │
@@ -19,6 +20,10 @@ This is the fuller write-up behind the README's architecture section. Paths are 
                                              │   toolActions request → approve → execute (R5,R6) │
                                              │   traces      AgentRun read API (R7)              │
                                              │   evals       runner · metrics · report (R2)      │
+                                             │   auth        login → JWT, /auth/me (D-072)       │
+                                             │   metrics     agent_run p50/p95, tokens, cost     │
+                                             │   feedback    ratings on drafts (D-070)           │
+                                             │   redTeam     flagged runs + stateless probe      │
                                              │                                                   │
                                              │  guardrails/  patterns · input scan · doc trust · │
                                              │               decision table · output scan        │
@@ -30,7 +35,7 @@ This is the fuller write-up behind the README's architecture section. Paths are 
                                     tsvector + GIN and pg_trgm on knowledge_chunk
 ```
 
-**Request path.** Every `/api` request passes `requireAuth` (three static demo tokens → `support_agent`, `support_manager`, `admin`; D-007, D-020) and, on four routes, `requireRole`. Handlers parse input with Zod, call a service, and answer plain snake_case JSON; every error, from every route, uses one envelope `{ error: { code, message, details, request_id } }` (D-003). `GET /health` is the only unauthenticated route.
+**Request path.** Every `/api` request except `POST /api/auth/login` passes `requireAuth` (a static demo token or a JWT issued by login over the seeded `user` table → `support_agent`, `support_manager`, `admin`; D-007, D-020, D-072) and then `enforcePolicy`, which checks method + path against the `ROUTE_POLICIES` map in `middleware/policy.ts` (four routes restricted to manager/admin or admin; everything else open to any authenticated role). Handlers parse input with Zod, call a service, and answer plain snake_case JSON; every error, from every route, uses one envelope `{ error: { code, message, details, request_id } }` (D-003). `GET /health` and `POST /api/auth/login` are the only unauthenticated routes.
 
 **Retrieval.** `data/knowledge_base/*.md` is chunked on `##` headings (25 chunks over 8 documents, D-016) into `knowledge_chunk`, which carries a Postgres-generated `tsvector` with a GIN index plus a `pg_trgm` index (D-014). Search is chunk-level: `websearch_to_tsquery` (strict, then OR-joined if fewer than two rows), a trigram similarity fallback, then a **category prior** that guarantees the category's policy document a slot and a +0.5 boost (D-026, D-027). Every SQL statement carries `quarantined = false` (rule R4, D-028). Phase 11 added an optional hybrid mode (`RETRIEVAL_MODE=hybrid`): chunks carry an embedding computed at ingest (local hashing by default, OpenRouter optional), the query is embedded the same way, and the cosine ranking is fused with the FTS ranking by reciprocal rank fusion before the category prior; the default stays `fts`.
 
@@ -178,7 +183,7 @@ sequenceDiagram
     S-->>Agent: 409 CONFLICT (only approved actions execute)
 
     Agent->>S: POST /api/tool-actions/:id/approve
-    S-->>Agent: 403 FORBIDDEN (requireRole support_manager | admin)
+    S-->>Agent: 403 FORBIDDEN (enforcePolicy: ROUTE_POLICIES allows support_manager | admin)
 
     Mgr->>S: POST /api/tool-actions/:id/approve {decision: approved, reason}
     S->>DB: conditional update approval_required → approved (second concurrent approver gets 409) + approval row
@@ -203,4 +208,4 @@ State machine (D-051): `approval_required → approved | rejected` (manager/admi
 
 ## 7. Data model (Prisma, `server/prisma/schema.prisma`)
 
-`customer`, `order`, `ticket`, `ticket_expectation` (R2, evaluation-only), `knowledge_document`, `knowledge_chunk` (tsvector), `triage_result`, `draft_reply`, `tool_definition`, `tool_action_request` (unique on `tool_name + idempotency_key`), `approval`, `agent_run`, `eval_case`, `eval_run`, `feedback` (reserved). Natural pack ids are primary keys; generated ids are prefixed cuid2 (`run_`, `draft_`, `act_`, `appr_`, `eval_run_`; D-012), except `knowledge_chunk.id` and `triage_result.id`, which are plain Prisma `cuid()` values. All timestamps are `timestamptz`; date-only pack values are midnight UTC (D-013).
+`customer`, `order`, `ticket`, `ticket_expectation` (R2, evaluation-only), `knowledge_document`, `knowledge_chunk` (tsvector; since Phase 11 also `embedding double precision[]` + `embedding_model`), `triage_result`, `draft_reply`, `tool_definition`, `tool_action_request` (unique on `tool_name + idempotency_key`), `approval`, `agent_run`, `eval_case`, `eval_run`, `feedback` (Phase 11: ratings 1–5 with optional reason / corrected response), `user` (Phase 11: login users with scrypt `password_hash`, unique email). Natural pack ids are primary keys; generated ids are prefixed cuid2 (`run_`, `draft_`, `act_`, `appr_`, `eval_run_`, `fb_`; D-012), except `knowledge_chunk.id` and `triage_result.id`, which are plain Prisma `cuid()` values. All timestamps are `timestamptz`; date-only pack values are midnight UTC (D-013).

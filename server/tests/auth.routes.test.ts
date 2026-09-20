@@ -93,6 +93,10 @@ describe('auth: every route except /health requires a bearer token', () => {
           const res = await request(app)[method.toLowerCase() as 'post'](p).set('Authorization', token).send({});
           expect(res.status, `${key} as ${role}`).toBe(403);
           expect(res.body.error).toMatchObject({ code: 'FORBIDDEN', details: { required_roles: allowed } });
+          // Express routes case-insensitively: an upper-cased last segment must meet the same policy
+          const shouted = p.replace(/[^/]+$/, (seg) => seg.toUpperCase());
+          const alias = await request(app)[method.toLowerCase() as 'post'](shouted).set('Authorization', token).send({});
+          expect(alias.status, `${shouted} as ${role}`).toBe(403);
         }
       }
     }

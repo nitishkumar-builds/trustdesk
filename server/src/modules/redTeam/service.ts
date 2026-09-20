@@ -54,13 +54,15 @@ interface StoredScan {
 }
 
 /** Every AgentRun whose stored guardrail_results carry a flagged input scan (draft runs), newest first. */
-export async function listFlaggedRuns(limit: number): Promise<{ items: FlaggedRunDto[]; total: number }> {
+export async function listFlaggedRuns(limit: number, offset = 0): Promise<{ items: FlaggedRunDto[]; total: number; limit: number; offset: number }> {
   const where = { guardrailResults: { path: ['input_scan', 'flagged'], equals: true } };
   const [rows, total] = await Promise.all([
-    prisma.agentRun.findMany({ where, orderBy: { createdAt: 'desc' }, take: limit }),
+    prisma.agentRun.findMany({ where, orderBy: [{ createdAt: 'desc' }, { runId: 'asc' }], take: limit, skip: offset }),
     prisma.agentRun.count({ where }),
   ]);
   return {
+    limit,
+    offset,
     items: rows.map((r) => {
       const g = (r.guardrailResults ?? {}) as StoredScan;
       return {
